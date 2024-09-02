@@ -2,7 +2,6 @@
 /*
 This package provides a simple method of encrypting and decrypting strings using key which can be generated using the GenerateKey() function.
 */
-
 package encryption
 
 import (
