@@ -8,31 +8,22 @@ import (
 )
 
 type Schema struct {
-	SchemaVersion string `yaml:"schemaVersion"`
-	SchemaName    string `yaml:"schemaName"`
-	Enabled       bool   `yaml:"enabled"`
-	Actions       []struct {
-		Name            string `yaml:"name"`
-		Description     string `yaml:"description"`
-		Enabled         bool   `yaml:"enabled"`
-		Type            string `yaml:"type"`
-		TargetComponent string `yaml:"targetComponent"`
-		MinimumRole     string `yaml:"minimumRole"`
-		Parameters      struct {
-			Required []struct {
-				Name          string `yaml:"name"`
-				Description   string `yaml:"description"`
-				ParameterType string `yaml:"parameterType"`
-				DefaultValue  string `yaml:"defaultValue"`
-			} `yaml:"required"`
-			Optional []struct {
-				Name          string `yaml:"name"`
-				Description   string `yaml:"description"`
-				ParameterType string `yaml:"parameterType"`
-				DefaultValue  string `yaml:"defaultValue"`
-			} `yaml:"optional"`
-		} `yaml:"parameters"`
-	} `yaml:"actions"`
+	RequestSchema struct {
+		SchemaVersion string `yaml:"schemaVersion"`
+		Categories    []struct {
+			Name        string `yaml:"name"`
+			Description string `yaml:"description"`
+			Actions     []struct {
+				Name               string   `yaml:"name"`
+				Body               bool     `yaml:"body"`
+				Method             string   `yaml:"method"`
+				Description        string   `yaml:"description"`
+				Parameters         []string `yaml:"parameters"`
+				OptionalParameters []string `yaml:"optionalParameters"`
+				Roles              []string `yaml:"roles"`
+			} `yaml:"actions"`
+		} `yaml:"categories"`
+	} `yaml:"requestSchema"`
 }
 
 func (schema *Schema) GetSchema(requestSchemaPath string) *Schema {
