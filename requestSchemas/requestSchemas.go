@@ -1,8 +1,6 @@
 package requestSchemas
 
 import (
-	"os"
-
 	log "github.com/sirupsen/logrus"
 	"gopkg.in/yaml.v2"
 )
@@ -26,13 +24,12 @@ type Schema struct {
 	} `yaml:"requestSchema"`
 }
 
-func (schema *Schema) GetSchema(requestSchemaPath string) *Schema {
-	schemaData, err := os.ReadFile(requestSchemaPath)
-	if err != nil {
-		log.Error("Error reading request schema file: ", err)
+func (schema *Schema) GetSchema(requestSchemaData []byte) *Schema {
+	if len(requestSchemaData) == 0 {
+		log.Error("Request schema data is empty")
 		return nil
 	}
-	err = yaml.Unmarshal(schemaData, schema)
+	err := yaml.Unmarshal(requestSchemaData, schema)
 	if err != nil {
 		log.Error("Error unmarshalling request schema file: ", err)
 		return nil
