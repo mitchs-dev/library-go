@@ -4,9 +4,14 @@ This package provides functions to interact with configuration files.
 package configuration
 
 import (
+	"errors"
 	"reflect"
+	"strings"
 
+	"github.com/mitchs-dev/build-struct/pkg/external"
+	"github.com/mitchs-dev/library-go/streaming"
 	log "github.com/sirupsen/logrus"
+	"gopkg.in/yaml.v2"
 )
 
 /*
@@ -44,4 +49,118 @@ func MergeWithDefault(defaultMap map[interface{}]interface{}, userMap map[interf
 		}
 	}
 	return userMap
+}
+
+// YAMLInlineToConfig converts an array of strings to a usable YAML formatted []byte
+func YAMLInlineToConfig(configStoreKeyList, configStoreKeyTypeList []string) ([]byte, error) {
+	// Convert configStoreKeyList to a nested map
+	configStoreKeyMap := make(map[string]interface{})
+	seenKeys := make(map[string]bool)
+
+	for keyIndex, key := range configStoreKeyList {
+		// Check if key has been seen before
+		if _, ok := seenKeys[key]; ok {
+			continue
+		}
+
+		seenKeys[key] = true
+
+		parts := strings.Split(key, ".")
+
+		// Initialize a reference to the root of the map
+		m := configStoreKeyMap
+
+		// For each part in the key except the last one
+		for _, part := range parts[:len(parts)-1] {
+			// If the part is not already a key in the map, add it
+			if _, ok := m[part]; !ok {
+				m[part] = make(map[string]interface{})
+			}
+
+			// Update the reference to the map that is the value of the current part
+			m = m[part].(map[string]interface{})
+		}
+
+		var value interface{}
+
+		switch configStoreKeyTypeList[keyIndex] {
+		case "string":
+			value = ""
+		case "bool":
+			value = false
+		case "int":
+			value = 0
+		case "float64":
+			value = 0.0
+		case "[]byte":
+			value = streaming.EncodeFromByte([]byte("string"))
+		default:
+			value = ""
+
+		}
+
+		// Set the value of the last part in the key to the desired value
+		m[parts[len(parts)-1]] = value
+	}
+
+	yamlData, err := yaml.Marshal(configStoreKeyMap)
+	if err != nil {
+		return nil, errors.New("error marshalling yaml data: " + err.Error())
+	}
+
+	return yamlData, nil
+
+}
+
+// YAMLInlineToMap converts an array of strings to a usable struct
+func YAMLInlineToStruct(structName string, configStoreKeyList, configStoreKeyTypeList []string) (string, error) {
+
+	yamlData, err := YAMLInlineToConfig(configStoreKeyList, configStoreKeyTypeList)
+	if err != nil {
+		return "", errors.New("error converting inline yaml to config: " + err.Error())
+	}
+
+	builtStruct, err := external.Call(structName, "", yamlData)
+	if err != nil {
+		return "", errors.New("error building struct: " + err.Error())
+	}
+
+	return builtStruct, nil
+}
+
+// GetValueForInlineYAML returns the value for a key in a nested map for the provided key
+func GetValueForInlineYAML(key string, configData []byte, configStruct interface{}) (interface{}, string, error) {
+	// Convert the configData to a nested map
+	configStoreKeyMap := make(map[interface{}]interface{})
+	err := yaml.Unmarshal(configData, &configStoreKeyMap)
+	if err != nil {
+		return nil, "", errors.New("error unmarshalling yaml data: " + err.Error())
+	}
+
+	// Split the key into parts
+	parts := strings.Split(key, ".")
+
+	// Initialize a reference to the root of the map
+	m := configStoreKeyMap
+
+	// For each part in the key except the last one
+	for _, part := range parts[:len(parts)-1] {
+		// If the part is not already a key in the map, return an error
+		if _, ok := m[part]; !ok {
+			return nil, "", errors.New("key not found: " + key)
+		}
+
+		// Update the reference to the map that is the value of the current part
+		m = m[part].(map[interface{}]interface{})
+	}
+
+	if _, ok := m[parts[len(parts)-1]]; !ok {
+		return nil, "", errors.New("key not found: " + key)
+	}
+
+	// Get the type of the value
+	valueType := reflect.TypeOf(m[parts[len(parts)-1]]).String()
+
+	// Return the value of the last part in the key
+	return m[parts[len(parts)-1]], valueType, nil
 }
