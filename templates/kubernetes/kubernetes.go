@@ -1,5 +1,3 @@
-// packageName: templates/kubernetes
-
 /*
 This package is used for general Kubernetes templates such as kubeconfig files.
 */
@@ -12,6 +10,7 @@ import (
 	"gopkg.in/yaml.v2"
 )
 
+// Kubeconfig struct used to hold the kubeconfig file data
 type Kubeconfig struct {
 	ApiVersion string `yaml:"apiVersion"`
 	Kind       string `yaml:"kind"`

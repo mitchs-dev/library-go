@@ -1,7 +1,5 @@
-// packageName: hmac
-
 /*
-	Package hmac provides a simple way to verify a message
+Package hmac provides a simple way to verify a message
 
 Original Author: github.com/alexellis
 */

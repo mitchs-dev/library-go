@@ -1,3 +1,6 @@
+/*
+This package provides a standardized approach to handling request schemas
+*/
 package requestSchemas
 
 import (
@@ -5,6 +8,7 @@ import (
 	"gopkg.in/yaml.v2"
 )
 
+// Struct to which the request schema configuration files should follow
 type Schema struct {
 	RequestSchema struct {
 		SchemaVersion string `yaml:"schemaVersion"`
@@ -24,6 +28,7 @@ type Schema struct {
 	} `yaml:"requestSchema"`
 }
 
+// GetSchema unmarshals the request schema data and returns a Schema struct
 func (schema *Schema) GetSchema(requestSchemaData []byte) *Schema {
 	if len(requestSchemaData) == 0 {
 		log.Error("Request schema data is empty")
