@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	defaultLogFormat       = "%lBracket%%time%%vLine%%lvl%%rBracket%%sColon% %msg%\n"
+	defaultLogFormat       = "%lBracket%%time%%vLine%%lvl%%vLine%%context%%rBracket%%sColon% %msg%\n"
 	JSONLogFormat          = "{\"id\":\"%id%\",\"timestamp\":\"%time%\",\"level\":\"%lvl%\",\"context\":\"%context%\",\"message\":\"%msg%\"}\n"
 	JSONLogMessageNoQuote  = "{\"id\":\"%id%\",\"timestamp\":\"%time%\",\"level\":\"%lvl%\",\"context\":\"%context%\",\"message\":%msg%}\n"
 	defaultTimestampFormat = "2006-01-02T15:04:05"
@@ -39,8 +39,24 @@ func (f *Formatter) Format(entry *logrus.Entry) ([]byte, error) {
 	if timestampFormat == "" {
 		timestampFormat = defaultTimestampFormat
 	}
+	_, file, line, ok := runtime.Caller(7)
+	if !ok {
+		file = "unknown"
+		line = 0
+	}
+	file = file[strings.LastIndex(file, "/")+1:]
+	pkgLine := fmt.Sprintf("%s:%d", file, line)
+	_, filePlusOne, linePlusOne, okPlusOne := runtime.Caller(8)
+	if !okPlusOne {
+		file = "unknown"
+		line = 0
+	}
+	filePlusOne = filePlusOne[strings.LastIndex(filePlusOne, "/")+1:]
+	pkgLinePlusOne := fmt.Sprintf("%s:%d", filePlusOne, linePlusOne)
 	output = strings.Replace(output, "%lBracket%", "[", 1)
+	// We specify 1 and 2 below as we do not want to accidentally replace a string in the message
 	output = strings.Replace(output, "%vLine%", "|", 1)
+	output = strings.Replace(output, "%vLine%", "|", 2)
 	output = strings.Replace(output, "%rBracket%", "]", 1)
 	output = strings.Replace(output, "%sColon%", ":", 1)
 	output = strings.Replace(output, "%time%", entry.Time.Format(timestampFormat), 1)
@@ -48,6 +64,7 @@ func (f *Formatter) Format(entry *logrus.Entry) ([]byte, error) {
 	shortLevel := entry.Level.String()[0:4]
 	level := strings.ToUpper(shortLevel)
 	output = strings.Replace(output, "%lvl%", level, 1)
+	output = strings.Replace(output, "%context%", pkgLine+"("+pkgLinePlusOne+")", 1)
 
 	for k, val := range entry.Data {
 		switch v := val.(type) {
@@ -112,7 +129,6 @@ func (f *JSONFormatter) Format(entry *logrus.Entry) ([]byte, error) {
 	}
 	filePlusOne = filePlusOne[strings.LastIndex(filePlusOne, "/")+1:]
 	pkgLinePlusOne := fmt.Sprintf("%s:%d", filePlusOne, linePlusOne)
-	file = file[strings.LastIndex(file, "/")+1:]
 	output = strings.Replace(output, "%id%", id, 1)
 	output = strings.Replace(output, "%time%", entry.Time.In(generator.GetLocation(f.Timezone)).Format(timestampFormat), 1)
 	output = strings.Replace(output, "%msg%", entry.Message, 1)
