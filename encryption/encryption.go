@@ -7,7 +7,6 @@ package encryption
 import (
 	"crypto/aes"
 	"crypto/cipher"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -44,7 +43,7 @@ func deriveKey(inputKey string) ([]byte, error) {
 	return key, nil
 }
 
-func Encrypt(plainText string, key string) (string, error) {
+func Encrypt(plainText string, key string, iv []byte) (string, error) {
 	derivedKey, err := deriveKey(key)
 	if err != nil {
 		return "", err
@@ -57,10 +56,6 @@ func Encrypt(plainText string, key string) (string, error) {
 
 	b := []byte(plainText)
 	ciphertext := make([]byte, aes.BlockSize+len(b))
-	iv := ciphertext[:aes.BlockSize]
-	if _, err := io.ReadFull(rand.Reader, iv); err != nil {
-		return "", err
-	}
 
 	stream := cipher.NewCFBEncrypter(block, iv)
 	stream.XORKeyStream(ciphertext[aes.BlockSize:], b)
