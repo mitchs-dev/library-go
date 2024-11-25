@@ -100,8 +100,12 @@ func ValidateToken(tokenString string, tokenSHA256 string, signingKey string) (b
 		return false, err
 	}
 
+	// Generate SHA256 hash
+	hash := sha256.Sum256([]byte(tokenString))
+	generatedTokenSHA256 := "0x" + hex.EncodeToString(hash[:])
+
 	// Verify token SHA256
-	if tokenSHA256 != "0x"+hex.EncodeToString([]byte(tokenString)) {
+	if tokenSHA256 != generatedTokenSHA256 {
 		err := errors.New("token invalid: SHA256 mismatch")
 		return false, err
 	}
@@ -186,8 +190,9 @@ func GenerateToken(signingKey string, timeZone string, timeoutPeriod string, iss
 	// Encode token data into base64
 	encodedTokenData := streaming.EncodeFromByte(tokenData)
 
-	// Generate token SHA256
-	tokenSHA256 := "0x" + hex.EncodeToString([]byte(encodedTokenData))
+	// Generate SHA256 hash
+	hash := sha256.Sum256([]byte(encodedTokenData))
+	tokenSHA256 := "0x" + hex.EncodeToString(hash[:])
 
 	return encodedTokenData, tokenSHA256, expirationtime, nil
 }
