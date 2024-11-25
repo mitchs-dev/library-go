@@ -104,6 +104,9 @@ func ValidateToken(tokenString string, tokenSHA256 string, signingKey string) (b
 	hash := sha256.Sum256([]byte(tokenString))
 	generatedTokenSHA256 := "0x" + hex.EncodeToString(hash[:])
 
+	log.Debug("Provided token SHA256: " + tokenSHA256)
+	log.Debug("Generated token SHA256: " + generatedTokenSHA256)
+
 	// Verify token SHA256
 	if tokenSHA256 != generatedTokenSHA256 {
 		err := errors.New("token invalid: SHA256 mismatch")
