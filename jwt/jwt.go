@@ -6,10 +6,13 @@ Package jwt provides functions for JWT token manipulation
 package jwt
 
 import (
+	"crypto/hmac"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/mitchs-dev/library-go/generator"
@@ -36,6 +39,7 @@ type JWTToken struct {
 }
 
 var jwtT JWTToken
+var jwtS JWTToken
 
 // ParseToken uses a JWT token string to parse the token into a JWTToken struct
 func (t *JWTToken) parseToken(tokenString string) JWTToken {
@@ -80,28 +84,65 @@ func GetAudience(tokenString string) (string, error) {
 }
 
 // Validate token uses a JWT token string and a signing key to validate the token
-func ValidateToken(tokenString string, tokenSHA256 string, signingKey string) (bool, error) {
+func ValidateToken(targetTokenString, sourceTokenString, tokenSHA256, signingKey string) (bool, error) {
 
-	// Parse token
-	jwtT.parseToken(tokenString)
+	// Parse target token
+	jwtT.parseToken(targetTokenString)
+
+	// Parse source token
+	jwtS.parseToken(sourceTokenString)
 
 	// Verify token was parsed correctly
-	if jwtT.Payload.JwtID == "" {
-		err := errors.New("token invalid: could not parse token")
+	if jwtT.Payload.JwtID != jwtS.Payload.JwtID {
+		err := errors.New("token invalid: JWT ID mismatch")
+		return false, err
+	} else {
+		log.Debug("JWT ID is valid")
+	}
+
+	// Verify the token audience
+	if jwtT.Payload.Audience != jwtS.Payload.Audience {
+		err := errors.New("token invalid: audience mismatch")
+		return false, err
+	} else {
+		log.Debug("Audience is valid")
+	}
+
+	// Verify the token issuer
+	if jwtT.Payload.Issuer != jwtS.Payload.Issuer {
+		err := errors.New("token invalid: issuer mismatch")
+		return false, err
+	} else {
+		log.Debug("Issuer is valid")
+	}
+
+	jwtPayloadJSON, err := json.Marshal(jwtT.Payload)
+	if err != nil {
 		return false, err
 	}
 
+	jwtHeaderJSON, err := json.Marshal(jwtT.Header)
+	if err != nil {
+		return false, err
+	}
 	// Generate signature
-	generatedSignature := generateSignature(signingKey, jwtT.Payload.JwtID)
+	generatedSignature, err := generateSignature(signingKey, string(jwtHeaderJSON), string(jwtPayloadJSON))
+	if err != nil {
+		return false, err
+	}
 
 	// Compare generated signature with token signature
 	if generatedSignature != jwtT.Signature {
-		err := errors.New("token invalid: signature mismatch")
+		err := errors.New("token invalid: signature mismatch ")
+		log.Debug("Got: " + generatedSignature)
+		log.Debug("Expected: " + jwtT.Signature)
 		return false, err
+	} else {
+		log.Debug("Signature is valid")
 	}
 
 	// Generate SHA256 hash
-	hash := sha256.Sum256([]byte(tokenString))
+	hash := sha256.Sum256([]byte(targetTokenString))
 	generatedTokenSHA256 := "0x" + hex.EncodeToString(hash[:])
 
 	log.Debug("Provided token SHA256: " + tokenSHA256)
@@ -125,13 +166,24 @@ func ValidateToken(tokenString string, tokenSHA256 string, signingKey string) (b
 	return true, nil
 }
 
-// Generate Signature uses a Signing Key and a JWT token string to generate a signature
-func generateSignature(signingKey string, jwtID string) string {
+func generateSignature(signingKey string, header string, payload string) (string, error) {
+	// Create a new HMAC hash using SHA256
+	h := hmac.New(sha256.New, []byte(signingKey))
 
-	saltedBytes := []byte(signingKey + jwtID)
-	hash := sha256.Sum256(saltedBytes)
-	return hex.EncodeToString(hash[:])
+	// Create the data to sign (header + payload)
+	data := header + "." + payload
 
+	// Write the data to the HMAC hash
+	_, err := h.Write([]byte(data))
+	if err != nil {
+		return "", fmt.Errorf("failed to write data to HMAC: %w", err)
+	}
+
+	// Compute the HMAC signature
+	signature := h.Sum(nil)
+
+	// Return the signature as a base64 URL encoded string
+	return base64.RawURLEncoding.EncodeToString(signature), nil
 }
 
 // Generate token generates a JWT token and returns the encoded token data, token SHA256, and expiration time (in the respective order)
@@ -155,33 +207,39 @@ func GenerateToken(signingKey string, timeZone string, timeoutPeriod string, iss
 	jwtID := generator.RandomString(64)
 
 	// Generate token
-	newTokenData := JWTToken{
-		Header: struct {
-			Algorithm string `json:"algorithm"`
-			Type      string `json:"type"`
-		}{
-			Algorithm: "HS256",
-			Type:      "JWT",
-		},
-		Payload: struct {
-			ExpirationTime int64  `json:"expirationTime"`
-			IssuedAt       int64  `json:"issuedAt"`
-			Issuer         string `json:"issuer"`
-			Subject        string `json:"subject"`
-			Audience       string `json:"audience"`
-			JwtID          string `json:"jwtID"`
-			Data           string `json:"data"`
-		}{
-			ExpirationTime: expirationtime,
-			IssuedAt:       timestamp,
-			Issuer:         issuer,
-			Subject:        subject,
-			Audience:       audience,
-			JwtID:          jwtID,
-			Data:           data,
-		},
-		Signature: generateSignature(signingKey, jwtID),
+	newTokenData := JWTToken{}
+
+	// Generate token
+	newTokenData.Header.Algorithm = "HS256"
+	newTokenData.Header.Type = "JWT"
+	newTokenData.Payload.ExpirationTime = expirationtime
+	newTokenData.Payload.IssuedAt = timestamp
+	newTokenData.Payload.Issuer = issuer
+	newTokenData.Payload.Subject = subject
+	newTokenData.Payload.Audience = audience
+	newTokenData.Payload.JwtID = jwtID
+	newTokenData.Payload.Data = data
+
+	// Marshal token data into byte array
+	tokenDataHeaderJSON, err := json.Marshal(newTokenData.Header)
+	if err != nil {
+		log.Error("Error marshalling token data: " + err.Error())
+		return "", "", 0, err
 	}
+
+	tokenDataPayloadJSON, err := json.Marshal(newTokenData.Payload)
+	if err != nil {
+		log.Error("Error marshalling token data: " + err.Error())
+		return "", "", 0, err
+	}
+
+	// Generate signature
+	signature, err := generateSignature(signingKey, string(tokenDataHeaderJSON), string(tokenDataPayloadJSON))
+	if err != nil {
+		return "", "", 0, err
+	}
+
+	newTokenData.Signature = signature
 
 	// Marshal token data into byte array
 	tokenData, err := json.Marshal(newTokenData)
