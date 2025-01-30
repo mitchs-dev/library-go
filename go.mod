@@ -9,7 +9,7 @@ require (
 	github.com/mitchs-dev/build-struct v1.2.1
 	github.com/otiai10/copy v1.14.0
 	github.com/sirupsen/logrus v1.9.3
-	golang.org/x/crypto v0.26.0
+	golang.org/x/crypto v0.31.0
 	gopkg.in/yaml.v2 v2.4.0
 )
 
@@ -23,9 +23,9 @@ require (
 	github.com/onsi/ginkgo v1.16.5 // indirect
 	github.com/onsi/gomega v1.34.2 // indirect
 	github.com/pkg/errors v0.8.1 // indirect
-	golang.org/x/net v0.28.0 // indirect
-	golang.org/x/sync v0.8.0 // indirect
-	golang.org/x/sys v0.24.0 // indirect
-	golang.org/x/text v0.18.0 // indirect
+	golang.org/x/net v0.33.0 // indirect
+	golang.org/x/sync v0.10.0 // indirect
+	golang.org/x/sys v0.28.0 // indirect
+	golang.org/x/text v0.21.0 // indirect
 	google.golang.org/protobuf v1.34.1 // indirect
 )
