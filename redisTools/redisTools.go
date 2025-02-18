@@ -15,37 +15,33 @@ import (
 
 // RedisConfiguration struct for Redis configuration
 type RedisConfiguration struct {
-	Host       RedisConfigurationHost
-	Encryption RedisConfigurationEncryption
+	Host       RedisConfigHost
+	Encryption RedisConfigEncryption
 }
 
-type RedisConfigurationEncryption struct {
+type RedisConfigEncryption struct {
 	Key string
 	IV  []byte
 }
 
-type RedisConfigurationHost struct {
+type RedisConfigHost struct {
 	Addr     string
 	Password string
 	DB       int
 }
 
-// redisApplicationConfiguration RedisConfiguration for Redis application configuration
-var redisApplicationConfiguration RedisConfiguration
-
 // RedisOptions returns a new Redis options struct
-func RedisOptions() *redis.Options {
+func RedisOptions(redisConfig RedisConfiguration) *redis.Options {
 	return &redis.Options{
-		Addr:     redisApplicationConfiguration.Host.Addr,
-		Password: redisApplicationConfiguration.Host.Password,
-		DB:       redisApplicationConfiguration.Host.DB,
+		Addr:     redisConfig.Host.Addr,
+		Password: redisConfig.Host.Password,
+		DB:       redisConfig.Host.DB,
 	}
 }
 
 // TestConnection tests the connection to Redis
 func TestConnection(redisConfig RedisConfiguration) error {
-	redisApplicationConfiguration = redisConfig
-	rCon := redis.NewClient(RedisOptions())
+	rCon := redis.NewClient(RedisOptions(redisConfig))
 	_, err := rCon.Ping().Result()
 	if err != nil {
 		return err
@@ -55,7 +51,7 @@ func TestConnection(redisConfig RedisConfiguration) error {
 
 // TestAccess tests the access to Redis
 func TestAccess(redisConfig RedisConfiguration) error {
-	redisApplicationConfiguration = redisConfig
+
 	key := generator.RandomString(8)
 	value := generator.RandomString(8)
 	err := Set(key, value, 0, redisConfig)
@@ -78,8 +74,8 @@ func TestAccess(redisConfig RedisConfiguration) error {
 
 // Set a value in Redis
 func Set(key string, value string, expiration int, redisConfig RedisConfiguration) error {
-	redisApplicationConfiguration = redisConfig
-	rCon := redis.NewClient(RedisOptions())
+
+	rCon := redis.NewClient(RedisOptions(redisConfig))
 	err := rCon.Set(key, value, 0).Err()
 	if err != nil {
 		return err
@@ -89,8 +85,8 @@ func Set(key string, value string, expiration int, redisConfig RedisConfiguratio
 
 // Get a value from Redis
 func Get(key string, redisConfig RedisConfiguration) (string, error) {
-	redisApplicationConfiguration = redisConfig
-	rCon := redis.NewClient(RedisOptions())
+
+	rCon := redis.NewClient(RedisOptions(redisConfig))
 	val, err := rCon.Get(key).Result()
 	if err != nil {
 		return "", err
@@ -100,8 +96,8 @@ func Get(key string, redisConfig RedisConfiguration) (string, error) {
 
 // Delete a key from Redis
 func Del(key string, redisConfig RedisConfiguration) error {
-	redisApplicationConfiguration = redisConfig
-	rCon := redis.NewClient(RedisOptions())
+
+	rCon := redis.NewClient(RedisOptions(redisConfig))
 	err := rCon.Del(key).Err()
 	if err != nil {
 		return err
@@ -110,17 +106,17 @@ func Del(key string, redisConfig RedisConfiguration) error {
 }
 
 // Set a value in Redis with encryption
-func ESet(key string, value string, expiration int, redisConfiguration RedisConfiguration) error {
-	redisApplicationConfiguration = redisConfiguration
-	redisEncryptionKey := redisApplicationConfiguration.Encryption.Key
-	redisEncryptionIV := redisApplicationConfiguration.Encryption.IV
+func ESet(key string, value string, expiration int, redisConfig RedisConfiguration) error {
+
+	redisEncryptionKey := redisConfig.Encryption.Key
+	redisEncryptionIV := redisConfig.Encryption.IV
 	if redisEncryptionKey == "" {
 		return errors.New("redis encryption key variable is empty")
 	}
 	if len(redisEncryptionIV) == 0 {
 		return errors.New("redis encryption IV variable is empty")
 	}
-	rCon := redis.NewClient(RedisOptions())
+	rCon := redis.NewClient(RedisOptions(redisConfig))
 	encValue, err := encryption.Encrypt(value, redisEncryptionKey, redisEncryptionIV)
 	if err != nil {
 		return err
@@ -133,13 +129,13 @@ func ESet(key string, value string, expiration int, redisConfiguration RedisConf
 }
 
 // Get a value from Redis with encryption
-func EGet(key string, redisConfiguration RedisConfiguration) (string, error) {
-	redisApplicationConfiguration = redisConfiguration
-	redisEncryptionKey := redisApplicationConfiguration.Encryption.Key
+func EGet(key string, redisConfig RedisConfiguration) (string, error) {
+
+	redisEncryptionKey := redisConfig.Encryption.Key
 	if redisEncryptionKey == "" {
 		return "", errors.New("redis encryption key variable is empty")
 	}
-	rCon := redis.NewClient(RedisOptions())
+	rCon := redis.NewClient(RedisOptions(redisConfig))
 	encValue, err := rCon.Get(key).Result()
 	if err != nil {
 		return "", err
@@ -152,9 +148,9 @@ func EGet(key string, redisConfiguration RedisConfiguration) (string, error) {
 }
 
 // Keys returns all keys based on a pattern
-func Keys(pattern string, redisConfiguration RedisConfiguration) ([]string, error) {
-	redisApplicationConfiguration = redisConfiguration
-	rCon := redis.NewClient(RedisOptions())
+func Keys(pattern string, redisConfig RedisConfiguration) ([]string, error) {
+
+	rCon := redis.NewClient(RedisOptions(redisConfig))
 	keys, err := rCon.Keys(pattern).Result()
 	if err != nil {
 		return nil, err
