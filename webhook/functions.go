@@ -33,7 +33,7 @@ Note: to use storeInRedis, you must have Redis configured. See the redisTools pa
 
 Note: timeZone can be any valid timezone string (e.g. "America/New_York")
 */
-func Create(webhookName string, requireSecret bool, storeInRedis bool, timeZone string) (string, string, string, error) {
+func Create(webhookName string, requireSecret bool, storeInRedis bool, timeZone string, redisConfig redisTools.RedisConfiguration) (string, string, string, error) {
 
 	// Before creating a webhook, let's
 	// 1. Verify that the webhook name is not empty
@@ -41,7 +41,7 @@ func Create(webhookName string, requireSecret bool, storeInRedis bool, timeZone 
 	if webhookName == "" {
 		return "", "", "", errors.New("webhook name cannot be empty")
 	}
-	webhookIDs, webhookNames, _, err := List()
+	webhookIDs, webhookNames, _, err := List(redisConfig)
 	if err != nil {
 		return "", "", "", err
 	}
@@ -75,7 +75,7 @@ func Create(webhookName string, requireSecret bool, storeInRedis bool, timeZone 
 	} else {
 
 		// Verify that Redis is configured
-		err := redisVerification()
+		err := redisVerification(redisConfig)
 		if err != nil {
 			return "", "", "", err
 		}
@@ -87,11 +87,11 @@ func Create(webhookName string, requireSecret bool, storeInRedis bool, timeZone 
 		// We will store the webhook ID as the key and the webhook name and secret as the value
 		webhookRedisKey := "SYSTEM.WEBHOOK." + webhookID
 
-		err = redisTools.ESet(webhookRedisKey+".SECRET", webhookSecret, 0)
+		err = redisTools.ESet(webhookRedisKey+".SECRET", webhookSecret, 0, redisConfig)
 		if err != nil {
 			return "", "", "", err
 		}
-		err = redisTools.ESet(webhookRedisKey+".NAME", webhookName, 0)
+		err = redisTools.ESet(webhookRedisKey+".NAME", webhookName, 0, redisConfig)
 		if err != nil {
 			return "", "", "", err
 		}
@@ -110,7 +110,7 @@ Note: You can provide the webhook ID or webhook name, or both; It will match on 
 
 Note: It is advised to provide the webhook ID over the webhook name for accuracy and performance
 */
-func Delete(webhookID string, webhookName string) error {
+func Delete(webhookID string, webhookName string, redisConfig redisTools.RedisConfiguration) error {
 
 	if webhookID == "" && webhookName == "" {
 		return errors.New("webhook ID or webhook name is required")
@@ -119,7 +119,7 @@ func Delete(webhookID string, webhookName string) error {
 	log.Debug("Deleting webhook using provided (if applicable) ID: ", webhookID, " and (if applicable) name: ", webhookName)
 
 	// Verify that Redis is configured
-	err := redisVerification()
+	err := redisVerification(redisConfig)
 	if err != nil {
 		return err
 	}
@@ -127,7 +127,7 @@ func Delete(webhookID string, webhookName string) error {
 	log.Debug("Redis is configured - Deleting webhook with ID: ", webhookID, " and name: ", webhookName)
 
 	// Get all keys from Redis
-	keys, err := redisTools.Keys("SYSTEM.WEBHOOK.*.NAME")
+	keys, err := redisTools.Keys("SYSTEM.WEBHOOK.*.NAME", redisConfig)
 	if err != nil {
 		return err
 	}
@@ -158,7 +158,7 @@ func Delete(webhookID string, webhookName string) error {
 		}
 
 		// Get the webhook name and secret
-		webhookNameFromRedis, err := redisTools.EGet(key + ".NAME")
+		webhookNameFromRedis, err := redisTools.EGet(key+".NAME", redisConfig)
 		if err != nil {
 			return err
 		}
@@ -179,11 +179,11 @@ func Delete(webhookID string, webhookName string) error {
 	log.Debug("Webhook found for deletion: ", webhookIDForDeletion)
 
 	// If we found a match, delete the webhook from Redis
-	err = redisTools.Del("SYSTEM.WEBHOOK." + webhookIDForDeletion + ".NAME")
+	err = redisTools.Del("SYSTEM.WEBHOOK."+webhookIDForDeletion+".NAME", redisConfig)
 	if err != nil {
 		return err
 	}
-	err = redisTools.Del("SYSTEM.WEBHOOK." + webhookIDForDeletion + ".SECRET")
+	err = redisTools.Del("SYSTEM.WEBHOOK."+webhookIDForDeletion+".SECRET", redisConfig)
 	if err != nil {
 		return err
 	}
@@ -198,10 +198,10 @@ func Delete(webhookID string, webhookName string) error {
 
 Note: If you did not store the webhooks in Redis initially, this function will return an empty list
 */
-func List() ([]string, []string, []string, error) {
+func List(redisConfig redisTools.RedisConfiguration) ([]string, []string, []string, error) {
 
 	// Verify that Redis is configured
-	err := redisVerification()
+	err := redisVerification(redisConfig)
 	if err != nil {
 		log.Error("Error verifying Redis configuration")
 		return nil, nil, nil, err
@@ -210,7 +210,7 @@ func List() ([]string, []string, []string, error) {
 	log.Debug("Redis is configured - Getting list of webhooks")
 
 	// Get all keys from Redis (by name)
-	keys, err := redisTools.Keys("SYSTEM.WEBHOOK.*.NAME")
+	keys, err := redisTools.Keys("SYSTEM.WEBHOOK.*.NAME", redisConfig)
 	if err != nil {
 		log.Error("Error fetching keys from Redis")
 		return nil, nil, nil, err
@@ -241,12 +241,12 @@ func List() ([]string, []string, []string, error) {
 		log.Debug("Processing webhook: " + webhookID + " to add to list")
 
 		// Get the webhook name and secret
-		webhookName, err := redisTools.EGet(key + ".NAME")
+		webhookName, err := redisTools.EGet(key+".NAME", redisConfig)
 		if err != nil {
 			log.Error("Error fetching name for webhook: ", webhookID)
 			return nil, nil, nil, err
 		}
-		webhookSecret, err := redisTools.EGet(key + ".SECRET")
+		webhookSecret, err := redisTools.EGet(key+".SECRET", redisConfig)
 		if err != nil {
 			log.Error("Error fetching secret for webhook: ", webhookID)
 			return nil, nil, nil, err
@@ -292,7 +292,7 @@ func (payloadItem *GitHubPayloadStruct) GetGitHubPayload(payloadFilePath string)
 /*
 GitHubPayload is a function which processes a GitHub webhook payload and returns the payload as a GitHubPayloadStruct
 */
-func (payloadItem *GitHubPayloadStruct) GitHubPayload(w http.ResponseWriter, r *http.Request) *GitHubPayloadStruct {
+func (payloadItem *GitHubPayloadStruct) GitHubPayload(w http.ResponseWriter, r *http.Request, redisConfig redisTools.RedisConfiguration) *GitHubPayloadStruct {
 
 	// Ensure that the webhookName is set as a parameter
 	webhookName := r.URL.Query().Get("webhookName")
@@ -345,7 +345,7 @@ func (payloadItem *GitHubPayloadStruct) GitHubPayload(w http.ResponseWriter, r *
 	log.Debug("Processing GitHub payload with delivery ID: ", GitHubDeliveryID+" (Hook ID: "+r.Header.Get("X-GitHub-Hook-ID")+" | Event: ", r.Header.Get("X-GitHub-Event")+")")
 
 	// Fetch webhook ID and secret from Redis
-	webhookIDs, webhookNames, webhookSecrets, err := List()
+	webhookIDs, webhookNames, webhookSecrets, err := List(redisConfig)
 	if err != nil {
 		http.Error(w, "Error fetching webhooks", http.StatusInternalServerError)
 		return nil
@@ -404,21 +404,21 @@ func (payloadItem *GitHubPayloadStruct) GitHubPayload(w http.ResponseWriter, r *
 }
 
 // Matches webhook name and ID
-func MatchID(webhookName string, webhookID string) (bool, error) {
+func MatchID(webhookName string, webhookID string, redisConfig redisTools.RedisConfiguration) (bool, error) {
 
 	// Immediately return an error if webhookName and webhookID are empty
 	if webhookName == "" || webhookID == "" {
 		return false, errors.New("webhook name and ID are required")
 	}
 
-	err := redisVerification()
+	err := redisVerification(redisConfig)
 	if err != nil {
 		return false, err
 	}
 
 	log.Debug("Matching webhook name: ", webhookName, " and ID: ", webhookID)
 
-	keys, err := redisTools.Keys("SYSTEM.WEBHOOK.*.NAME")
+	keys, err := redisTools.Keys("SYSTEM.WEBHOOK.*.NAME", redisConfig)
 	if err != nil {
 		return false, err
 	}
@@ -439,7 +439,7 @@ func MatchID(webhookName string, webhookID string) (bool, error) {
 		key = strings.Replace(key, ".NAME", "", 1)
 
 		// Get the webhook name and secret
-		webhookNameFromRedis, err := redisTools.EGet(key + ".NAME")
+		webhookNameFromRedis, err := redisTools.EGet(key+".NAME", redisConfig)
 		if err != nil {
 			return false, err
 		}
@@ -458,7 +458,7 @@ func MatchID(webhookName string, webhookID string) (bool, error) {
 }
 
 // GetSecret returns the secret for a webhook by webhook ID or webhook name
-func GetSecret(webhookID string, webhookName string) (string, error) {
+func GetSecret(webhookID string, webhookName string, redisConfig redisTools.RedisConfiguration) (string, error) {
 
 	if webhookID == "" && webhookName == "" {
 		return "", errors.New("webhook ID or webhook name is required")
@@ -466,14 +466,14 @@ func GetSecret(webhookID string, webhookName string) (string, error) {
 
 	log.Debug("Getting secret using provided (if applicable) ID: ", webhookID, " and (if applicable) name: ", webhookName)
 
-	err := redisVerification()
+	err := redisVerification(redisConfig)
 	if err != nil {
 		return "", err
 	}
 
 	log.Debug("Redis is configured - Getting secret for webhook with ID: ", webhookID, " and name: ", webhookName)
 
-	idArray, nameArray, secretArray, err := List()
+	idArray, nameArray, secretArray, err := List(redisConfig)
 	if err != nil {
 		return "", err
 	}
@@ -500,10 +500,14 @@ func GetSecret(webhookID string, webhookName string) (string, error) {
 /*
 Verifies that Redis is configured but does not run tests as this should be done in the main application initalization
 */
-func redisVerification() error {
+func redisVerification(redisConfig redisTools.RedisConfiguration) error {
 
-	if redisTools.RedisEncryptionKey == "" {
+	if redisConfig.Encryption.Key == "" {
 		return errors.New("redis does not seem to be configured (Redis Encryption Key is empty)")
+	}
+
+	if len(redisConfig.Encryption.IV) == 0 {
+		return errors.New("redis does not seem to be configured (Redis Encryption IV is empty)")
 	}
 
 	return nil
