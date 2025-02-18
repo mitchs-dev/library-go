@@ -15,15 +15,19 @@ import (
 
 // RedisConfiguration struct for Redis configuration
 type RedisConfiguration struct {
-	Encryption struct {
-		Key string
-		IV  []byte
-	}
-	Host struct {
-		Addr     string
-		Password string
-		DB       int
-	}
+	Host       RedisConfigurationHost
+	Encryption RedisConfigurationEncryption
+}
+
+type RedisConfigurationEncryption struct {
+	Key string
+	IV  []byte
+}
+
+type RedisConfigurationHost struct {
+	Addr     string
+	Password string
+	DB       int
 }
 
 // redisApplicationConfiguration RedisConfiguration for Redis application configuration
