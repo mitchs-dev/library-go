@@ -67,12 +67,11 @@ func InitEncryption(setNoncePoolSize int) {
 
 The key should be 32 bytes (256 bits) for AES-256.
 If useBinaryData is true, the ciphertext will be returned as a byte slice.
-The return is the cipher text in []byte or hex encoded string, and the nonce in hex encoded string.
-For the cipher text return, you will want to use the correct return for what you selected for useBinaryData.
+The return will be in the format of string (useBinaryData = false) or []byte (useBinaryData = true).
 */
-func Encrypt(plaintext []byte, key []byte, useBinaryData bool) ([]byte, string, error) {
+func Encrypt(plaintext []byte, key []byte, useBinaryData bool) (interface{}, error) {
 	if !encryptionInitialized {
-		return nil, "", fmt.Errorf("encryption: encryption not initialized")
+		return nil, fmt.Errorf("encryption: encryption not initialized")
 	}
 
 	keyValMapKey, ok := appKeyMap[string(key)]
@@ -104,7 +103,7 @@ func Encrypt(plaintext []byte, key []byte, useBinaryData bool) ([]byte, string, 
 	log.Debug("encryption: Nonce pool initialized")
 
 	if len(key) != AES256KeySize {
-		return nil, "", InvalidKeySizeError
+		return nil, InvalidKeySizeError
 	}
 	log.Debug("encryption: Key size checked")
 
@@ -125,12 +124,12 @@ func Encrypt(plaintext []byte, key []byte, useBinaryData bool) ([]byte, string, 
 	// or if you want to encode it with hex
 	if useBinaryData {
 		log.Debug("Returning binary data")
-		return ciphertextWithAAD, "", nil
+		return ciphertextWithAAD, nil
 	} else {
 		log.Debug("Returning encoded data")
 		// Encode with Hex for performance reasons
 		encodedHex := hex.EncodeToString(ciphertextWithAAD)
-		return nil, encodedHex, nil
+		return encodedHex, nil
 	}
 }
 
@@ -138,10 +137,10 @@ func Encrypt(plaintext []byte, key []byte, useBinaryData bool) ([]byte, string, 
 	Decrypt decrypts the given ciphertext using AES-256-GCM with the provided key.
 
 The key should be 32 bytes (256 bits) for AES-256.
-If usedBinaryData is true, the ciphertext should be a byte slice.
+If usedBinaryData is true, the ciphertext should be a byte slice or it will return an error.
 Unlike Encrypt, decrypt is going to return the plaintext as a byte slice.
 */
-func Decrypt(ciphertext string, key []byte, usedBinaryData bool) ([]byte, error) {
+func Decrypt(ciphertext interface{}, key []byte, usedBinaryData bool) ([]byte, error) {
 	log.Debug("Decrypting")
 	if !encryptionInitialized {
 		return nil, fmt.Errorf("encryption: encryption not initialized")
@@ -174,17 +173,24 @@ func Decrypt(ciphertext string, key []byte, usedBinaryData bool) ([]byte, error)
 
 	var ciphertextBytes []byte
 
-	// If the encryption was not outputted as binary data
-	// It was encoded with Hex and needs to be decoded
-	if !usedBinaryData {
-		log.Debug("decryption: Decoding hex")
-		ciphertextBytes, err = hex.DecodeString(ciphertext)
+	// Ensure that the ciphertext is in the correct format
+	if usedBinaryData {
+		ciphertextBytes, ok := ciphertext.([]byte)
+		if !ok {
+			return nil, fmt.Errorf("decryption: ciphertext must be []byte when using binary data, got %T", ciphertext)
+		}
+		log.Debugf("decryption: Ciphertext is []byte, length: %d", len(ciphertextBytes))
+
+	} else {
+		ciphertextString, ok := ciphertext.(string)
+		if !ok {
+			return nil, fmt.Errorf("decryption: ciphertext must be string when using text data, got %T", ciphertext)
+		}
+		log.Debugf("decryption: Ciphertext is string, length: %d", len(ciphertextString))
+		ciphertextBytes, err = hex.DecodeString(ciphertextString)
 		if err != nil {
 			return nil, fmt.Errorf("decryption: failed to decode base64: %w", err)
 		}
-	} else {
-		log.Debug("decryption: Using binary data")
-		ciphertextBytes = []byte(ciphertext)
 	}
 
 	aad := ciphertextBytes[:8]
