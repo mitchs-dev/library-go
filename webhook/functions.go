@@ -502,12 +502,8 @@ Verifies that Redis is configured but does not run tests as this should be done 
 */
 func redisVerification(redisConfig redisTools.RedisConfiguration) error {
 
-	if redisConfig.Encryption.Key == "" {
+	if redisConfig.Encryption.Key == nil {
 		return errors.New("redis does not seem to be configured (Redis Encryption Key is empty)")
-	}
-
-	if len(redisConfig.Encryption.IV) == 0 {
-		return errors.New("redis does not seem to be configured (Redis Encryption IV is empty)")
 	}
 
 	return nil

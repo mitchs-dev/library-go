@@ -20,8 +20,7 @@ type RedisConfiguration struct {
 }
 
 type RedisConfigEncryption struct {
-	Key string
-	IV  []byte
+	Key []byte
 }
 
 type RedisConfigHost struct {
@@ -109,15 +108,12 @@ func Del(key string, redisConfig RedisConfiguration) error {
 func ESet(key string, value string, expiration int, redisConfig RedisConfiguration) error {
 
 	redisEncryptionKey := redisConfig.Encryption.Key
-	redisEncryptionIV := redisConfig.Encryption.IV
-	if redisEncryptionKey == "" {
+	if redisEncryptionKey == nil {
 		return errors.New("redis encryption key variable is empty")
 	}
-	if len(redisEncryptionIV) == 0 {
-		return errors.New("redis encryption IV variable is empty")
-	}
 	rCon := redis.NewClient(RedisOptions(redisConfig))
-	encValue, err := encryption.Encrypt(value, redisEncryptionKey, redisEncryptionIV)
+	valueBytes := []byte(value)
+	encValue, err := encryption.Encrypt(valueBytes, redisEncryptionKey, false)
 	if err != nil {
 		return err
 	}
@@ -132,7 +128,7 @@ func ESet(key string, value string, expiration int, redisConfig RedisConfigurati
 func EGet(key string, redisConfig RedisConfiguration) (string, error) {
 
 	redisEncryptionKey := redisConfig.Encryption.Key
-	if redisEncryptionKey == "" {
+	if redisEncryptionKey == nil {
 		return "", errors.New("redis encryption key variable is empty")
 	}
 	rCon := redis.NewClient(RedisOptions(redisConfig))
@@ -140,11 +136,11 @@ func EGet(key string, redisConfig RedisConfiguration) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	value, err := encryption.Decrypt(encValue, redisEncryptionKey)
+	value, err := encryption.Decrypt(encValue, redisEncryptionKey, false)
 	if err != nil {
 		return "", err
 	}
-	return value, nil
+	return string(value), nil
 }
 
 // Keys returns all keys based on a pattern
