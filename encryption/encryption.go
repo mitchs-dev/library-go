@@ -50,11 +50,11 @@ var (
 const AES256KeySize = 32
 
 // InitEncryption should be run before any (de)encryption operations.
-func InitEncryption(nodePoolSize int) {
-	if nodePoolSize == 0 {
+func InitEncryption(setNoncePoolSize int) {
+	if noncePoolSize == 0 {
 		noncePoolSize = noncePoolSizeDefault
 	} else {
-		noncePoolSize = nodePoolSize
+		noncePoolSize = setNoncePoolSize
 	}
 	// Make the key map
 	appKeyMap = newKeyMap()
