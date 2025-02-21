@@ -113,7 +113,7 @@ func ESet(key string, value string, expiration int, redisConfig RedisConfigurati
 	}
 	rCon := redis.NewClient(RedisOptions(redisConfig))
 	valueBytes := []byte(value)
-	_, encValue, err := encryption.Encrypt(valueBytes, redisEncryptionKey, false)
+	encValue, err := encryption.Encrypt(valueBytes, redisEncryptionKey, false)
 	if err != nil {
 		return err
 	}
