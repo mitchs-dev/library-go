@@ -127,7 +127,7 @@ func Encrypt(plaintext []byte, key []byte, useBinaryData bool) (interface{}, err
 		return ciphertextWithAAD, nil
 	} else {
 		log.Debug("Returning encoded data")
-		// Encode with Hex for performance reasons
+		// Encode with Hex over b64 for performance reasons
 		encodedHex := hex.EncodeToString(ciphertextWithAAD)
 		return encodedHex, nil
 	}
@@ -222,7 +222,7 @@ func initNoncePool(nonceSize int) {
 		noncePool[i] = make([]byte, nonceSize)
 		_, err := io.ReadFull(rand.Reader, noncePool[i])
 		if err != nil {
-			log.Fatalf("Failed to initialize nonce pool: %v", err) // Handle appropriately
+			log.Fatalf("Failed to initialize nonce pool: %v", err)
 		}
 	}
 }
@@ -253,7 +253,7 @@ func refillNoncePool(nonceSize int) {
 			noncePool[i] = make([]byte, nonceSize)
 			_, err := io.ReadFull(rand.Reader, noncePool[i])
 			if err != nil {
-				log.Errorf("Failed to refill nonce pool: %v", err) // Log but continue
+				log.Errorf("Failed to refill nonce pool: %v", err)
 			}
 		}
 	}
@@ -290,7 +290,7 @@ func initCipher(key []byte) (cipher.AEAD, error) {
 		}
 
 		aesgcm = newAesgcm
-		nonceSize = aesgcm.NonceSize() // Move this after aesgcm is definitely set
+		nonceSize = aesgcm.NonceSize()
 	})
 	log.Debug("Returning cipher")
 	if initErr != nil {
