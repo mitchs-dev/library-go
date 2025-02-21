@@ -10,7 +10,6 @@ REQUIRED VARIABLES: (SET ON INIT)
 	TimeZone      string
 	LogPrefix     string
 	EncryptionKey string
-	EncryptionIV  []byte
 
 Example:
 
@@ -46,8 +45,7 @@ var (
 	OptionsDir    string
 	TimeZone      string
 	LogPrefix     string
-	EncryptionKey string
-	EncryptionIV  []byte
+	EncryptionKey []byte
 )
 
 func badgerConfigCheck() error {
@@ -63,11 +61,8 @@ func badgerConfigCheck() error {
 	if LogPrefix == "" {
 		return errors.New("badger log prefix is empty")
 	}
-	if EncryptionKey == "" {
+	if EncryptionKey == nil {
 		return errors.New("badger encryption key is empty")
-	}
-	if EncryptionIV == nil {
-		return errors.New("badger encryption IV is nil")
 	}
 	return nil
 }
@@ -165,11 +160,11 @@ func (b *CommandsRepository) GetAll() ([]Command, error) {
 
 func (b *CommandsRepository) Set(k, v []byte) error {
 
-	vValueEnc, err := encryption.Encrypt(string(v), EncryptionKey, EncryptionIV)
+	vValueEnc, err := encryption.Encrypt(v, EncryptionKey, true)
 	if err != nil {
 		return err
 	}
-	v = []byte(vValueEnc)
+	v = vValueEnc.([]byte)
 	err = b.db.Update(func(txn *badger.Txn) error {
 		err := txn.Set(k, v)
 		return err
@@ -190,7 +185,7 @@ func (b *CommandsRepository) Get(k []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	} else {
-		vValueDec, err := encryption.Decrypt(string(v), EncryptionKey)
+		vValueDec, err := encryption.Decrypt(v, EncryptionKey, true)
 		if err != nil {
 			return nil, err
 		}
@@ -221,7 +216,7 @@ func (b *CommandsRepository) Iterate(prefix []byte) ([]Command, error) {
 			if err != nil {
 				return err
 			}
-			vDecrypt, err := encryption.Decrypt(string(v), EncryptionKey)
+			vDecrypt, err := encryption.Decrypt(v, EncryptionKey, true)
 			if err != nil {
 				return err
 			}
