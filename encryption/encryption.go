@@ -19,8 +19,8 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-// ErrInvalidKeySize is returned when the provided key has an invalid size.
-type ErrInvalidKeySize string
+// errInvalidKeySize is returned when the provided key has an invalid size.
+type errInvalidKeySize string
 
 // keyMap is a map of keys to their corresponding AES-GCM ciphers.
 type keyMap map[string]struct {
@@ -28,12 +28,12 @@ type keyMap map[string]struct {
 	lock   sync.Mutex
 }
 
-func (e ErrInvalidKeySize) Error() string {
+func (e errInvalidKeySize) Error() string {
 	return string(e)
 }
 
 var (
-	InvalidKeySizeError = ErrInvalidKeySize("encryption: invalid key size")
+	invalidKeySizeError = errInvalidKeySize("encryption: invalid key size")
 	// aesgcm is the AES-GCM cipher.
 	aesgcm                cipher.AEAD
 	nonceSize             int
@@ -47,7 +47,7 @@ var (
 	appKeyMap             keyMap
 )
 
-const AES256KeySize = 32
+const aes256KeySize = 32
 
 // InitEncryption should be run before any (de)encryption operations.
 func InitEncryption(setNoncePoolSize int) {
@@ -102,8 +102,8 @@ func Encrypt(plaintext []byte, key []byte, useBinaryData bool) (interface{}, err
 	initNoncePool(aesgcm.NonceSize())
 	log.Debug("encryption: Nonce pool initialized")
 
-	if len(key) != AES256KeySize {
-		return nil, InvalidKeySizeError
+	if len(key) != aes256KeySize {
+		return nil, invalidKeySizeError
 	}
 	log.Debug("encryption: Key size checked")
 
@@ -146,8 +146,8 @@ func Decrypt(ciphertext interface{}, key []byte, usedBinaryData bool) ([]byte, e
 		return nil, fmt.Errorf("encryption: encryption not initialized")
 	}
 
-	if len(key) != AES256KeySize {
-		return nil, InvalidKeySizeError
+	if len(key) != aes256KeySize {
+		return nil, invalidKeySizeError
 	}
 
 	var err error
@@ -206,8 +206,8 @@ func Decrypt(ciphertext interface{}, key []byte, usedBinaryData bool) ([]byte, e
 
 // GenerateRandomKey generates a random key of the specified length.
 // For AES-256, the length should be 32 bytes.
-func GenerateRandomKey(length int) ([]byte, error) {
-	key := make([]byte, length)
+func GenerateRandomKey() ([]byte, error) {
+	key := make([]byte, aes256KeySize)
 	_, err := io.ReadFull(rand.Reader, key)
 	if err != nil {
 		return nil, fmt.Errorf("key generation: failed to read random bytes: %w", err)
