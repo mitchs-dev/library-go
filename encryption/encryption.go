@@ -62,12 +62,17 @@ func InitEncryption(setNoncePoolSize int) {
 	encryptionInitialized = true
 }
 
-// Encrypt encrypts the given plaintext using AES-256-GCM with the provided key.
-// The key should be 32 bytes (256 bits) for AES-256.
-// If useBinaryData is true, the ciphertext will be returned as a byte slice.
-func Encrypt(plaintext []byte, key []byte, useBinaryData bool) (string, error) {
+/*
+	Encrypt encrypts the given plaintext using AES-256-GCM with the provided key.
+
+The key should be 32 bytes (256 bits) for AES-256.
+If useBinaryData is true, the ciphertext will be returned as a byte slice.
+The return is the cipher text in []byte or hex encoded string, and the nonce in hex encoded string.
+For the cipher text return, you will want to use the correct return for what you selected for useBinaryData.
+*/
+func Encrypt(plaintext []byte, key []byte, useBinaryData bool) ([]byte, string, error) {
 	if !encryptionInitialized {
-		return "", fmt.Errorf("encryption: encryption not initialized")
+		return nil, "", fmt.Errorf("encryption: encryption not initialized")
 	}
 
 	keyValMapKey, ok := appKeyMap[string(key)]
@@ -99,7 +104,7 @@ func Encrypt(plaintext []byte, key []byte, useBinaryData bool) (string, error) {
 	log.Debug("encryption: Nonce pool initialized")
 
 	if len(key) != AES256KeySize {
-		return "", InvalidKeySizeError // Or handle the error as you see fit
+		return nil, "", InvalidKeySizeError
 	}
 	log.Debug("encryption: Key size checked")
 
@@ -120,18 +125,22 @@ func Encrypt(plaintext []byte, key []byte, useBinaryData bool) (string, error) {
 	// or if you want to encode it with hex
 	if useBinaryData {
 		log.Debug("Returning binary data")
-		return string(ciphertextWithAAD), nil
+		return ciphertextWithAAD, "", nil
 	} else {
 		log.Debug("Returning encoded data")
 		// Encode with Hex for performance reasons
 		encodedHex := hex.EncodeToString(ciphertextWithAAD)
-		return encodedHex, nil
+		return nil, encodedHex, nil
 	}
 }
 
-// Decrypt decrypts the given ciphertext using AES-256-GCM with the provided key.
-// The key should be 32 bytes (256 bits) for AES-256.
-// If usedBinaryData is true, the ciphertext should be a byte slice.
+/*
+	Decrypt decrypts the given ciphertext using AES-256-GCM with the provided key.
+
+The key should be 32 bytes (256 bits) for AES-256.
+If usedBinaryData is true, the ciphertext should be a byte slice.
+Unlike Encrypt, decrypt is going to return the plaintext as a byte slice.
+*/
 func Decrypt(ciphertext string, key []byte, usedBinaryData bool) ([]byte, error) {
 	log.Debug("Decrypting")
 	if !encryptionInitialized {
