@@ -154,7 +154,7 @@ func (f *JSONFormatter) Format(entry *logrus.Entry) ([]byte, error) {
 		Time:    entry.Time.In(timezone).Format(timestampFormat),
 		Level:   entry.Level.String(),
 		Message: entry.Message,
-		Context: getContext(),
+		Context: getCallerContext(),
 		Data:    entry.Data,
 	}
 
@@ -167,18 +167,37 @@ func (f *JSONFormatter) Format(entry *logrus.Entry) ([]byte, error) {
 	return buffer.Bytes(), nil
 }
 
-func getContext() string {
-	_, file, line, ok := runtime.Caller(7)
-	if !ok {
-		return "unknown:0"
+// Find the first non-logrus frame to get actual source location
+func getCallerContext() string {
+	pc := make([]uintptr, 15)
+	n := runtime.Callers(3, pc)
+	if n == 0 {
+		return "unknown:0(unknown:0)"
 	}
-	file = file[strings.LastIndex(file, "/")+1:]
-	pkgLine := fmt.Sprintf("%s:%d", file, line)
-	_, filePlusOne, linePlusOne, okPlusOne := runtime.Caller(8)
-	if !okPlusOne {
-		return "unknown:0"
+
+	frames := runtime.CallersFrames(pc[:n])
+	var current, previous string
+
+	for {
+		frame, more := frames.Next()
+		if !more {
+			break
+		}
+
+		if !strings.Contains(frame.File, "logrus") {
+			fileName := frame.File[strings.LastIndex(frame.File, "/")+1:]
+			if current == "" {
+				current = fmt.Sprintf("%s:%d", fileName, frame.Line)
+			} else {
+				previous = fmt.Sprintf("%s:%d", fileName, frame.Line)
+				break
+			}
+		}
 	}
-	filePlusOne = filePlusOne[strings.LastIndex(filePlusOne, "/")+1:]
-	pkgLinePlusOne := fmt.Sprintf("%s:%d", filePlusOne, linePlusOne)
-	return pkgLine + "(" + pkgLinePlusOne + ")"
+
+	if previous == "" {
+		previous = "unknown:0"
+	}
+
+	return fmt.Sprintf("%s(%s)", current, previous)
 }
