@@ -1,68 +1,57 @@
-// packageName: generator
-
-/*
-Package generator provides functions to generate things, such as: random strings, timestamps, and correlation IDs, etc
-*/
 package generator
 
 import (
-	"math/rand"
+	"crypto/rand"
+	"encoding/base64"
 	"strings"
 	"time"
 )
 
-var seededRand *rand.Rand = rand.New(
-	rand.NewSource(time.Now().UnixNano()))
-
 // Generate random string of length n
 func RandomString(n int) string {
-	var letters = []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890")
-	b := make([]rune, n)
-	for i := range b {
-		b[i] = letters[seededRand.Intn(len(letters))]
+	b := make([]byte, n)
+	_, err := rand.Read(b)
+	if err != nil {
+		return ""
 	}
-	return string(b)
+	return base64.RawURLEncoding.EncodeToString(b)
 }
 
 // Generate a correlation ID with timestamp and random string
 func CorrelationID(timeZone string) string {
-	return StringTimestamp(timeZone) + RandomString(7)
+	return StringTimestamp(timeZone) + RandomString(20)
 }
 
-// Generate timestamp in RFC3339 (minues dashes and colons) format with timezone provided
+// Generate timestamp in RFC3339 (minus dashes and colons) format with timezone provided
 func StringTimestamp(timeZone string) string {
-	timestamp := time.Now().In(GetLocation(timeZone)).Format(time.RFC3339)
-	timestamp = strings.Replace(timestamp, "-", "", -1)
-	timestamp = strings.Replace(timestamp, ":", "", -1)
+	loc := GetLocation(timeZone)
+	timestamp := time.Now().In(loc).Format("20060102T150405Z0700")
 	return strings.TrimSpace(timestamp)
-
 }
 
-// Generate timestamp in RFC3339 (minues dashes and colons) format with timezone provided
+// Generate timestamp in RFC3339 (minus colons and plus sign) format with timezone provided
 func FileNameTimestamp(timeZone string) string {
-	timestamp := time.Now().In(GetLocation(timeZone)).Format(time.RFC3339)
-	timestamp = strings.Replace(timestamp, ":", "-", -1)
-	timestamp = strings.Replace(timestamp, "+", "_", -1)
-	timestamp = strings.Replace(timestamp, "T", "_", -1)
+	loc := GetLocation(timeZone)
+	timestamp := time.Now().In(loc).Format("2006-01-02_15-04-05Z07:00")
 	return strings.TrimSpace(timestamp)
-
 }
 
 // Generate timestamp in RFC3339 format with timezone provided
 func Timestamp(timeZone string) string {
-	return time.Now().In(GetLocation(timeZone)).Format(time.RFC3339)
+	loc := GetLocation(timeZone)
+	return time.Now().In(loc).Format(time.RFC3339)
 }
 
 // Returns timestamp as epoch time in int format
 func EpochTimestamp(timeZone string) int {
-	return int(time.Now().In(GetLocation(timeZone)).Unix())
+	loc := GetLocation(timeZone)
+	return int(time.Now().In(loc).Unix())
 }
 
 // Returns the timezone location based on the timezone string provided
 func GetLocation(timeZone string) *time.Location {
 	var location string
 	if timeZone == "" {
-		// Set default timezone to UTC
 		location = "UTC"
 	} else {
 		location = timeZone
@@ -71,7 +60,6 @@ func GetLocation(timeZone string) *time.Location {
 	if err != nil {
 		setTimeZone, _ := time.LoadLocation("UTC")
 		return setTimeZone
-
 	}
 	return setTimeZone
 }
