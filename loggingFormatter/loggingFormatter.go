@@ -6,11 +6,14 @@ This package is used provide a standardized format for loggers using the sirupse
 package loggingFormatter
 
 import (
+	"bytes"
 	"fmt"
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 
+	jsoniter "github.com/json-iterator/go"
 	"github.com/mitchs-dev/library-go/generator"
 	"github.com/sirupsen/logrus"
 )
@@ -91,62 +94,74 @@ type JSONFormatter struct {
 	Timezone        string // Timezone to use for timestamps
 	LogFormat       string // Format string for log output
 	MessageNoQuote  bool   // If true, don't put the message field in quotes
+	bufferPool      *sync.Pool
+}
+
+// NewJSONFormatter creates a new JSONFormatter
+func NewJSONFormatter() *JSONFormatter {
+	return &JSONFormatter{
+		bufferPool: &sync.Pool{
+			New: func() interface{} {
+				return new(bytes.Buffer)
+			},
+		},
+	}
+}
+
+// LogEntry is the log entry structure for JSONFormatter
+type LogEntry struct {
+	ID      string        `json:"id"`
+	Time    string        `json:"time"`
+	Level   string        `json:"level"`
+	Context string        `json:"context"`
+	Message string        `json:"message"`
+	Data    logrus.Fields `json:"data,omitempty"`
 }
 
 // Use: loggingFormatter.JSONFormatter{} (Struct) |DESCRIPTION| Format renders a single log entry as JSON |ARGS| Prefix (string), Timezone (string), MessageNoQuote (bool)
 func (f *JSONFormatter) Format(entry *logrus.Entry) ([]byte, error) {
-	output := f.LogFormat
-	if output == "" {
-		if f.MessageNoQuote {
-			output = JSONLogMessageNoQuote
-		} else {
-			output = JSONLogFormat
+	if f.bufferPool == nil {
+		f.bufferPool = &sync.Pool{
+			New: func() interface{} {
+				return new(bytes.Buffer)
+			},
 		}
 	}
 
-	timestampFormat := f.TimestampFormat
-	if timestampFormat == "" {
-		timestampFormat = defaultTimestampFormat
+	buffer := f.bufferPool.Get().(*bytes.Buffer)
+	buffer.Reset()
+	defer f.bufferPool.Put(buffer)
+
+	logEntry := LogEntry{
+		ID:      f.Prefix + generator.StringTimestamp(f.Timezone) + generator.RandomString(20),
+		Time:    entry.Time.UTC().Format(f.TimestampFormat),
+		Level:   entry.Level.String(),
+		Message: entry.Message, // Initially set as string
+		Context: getContext(),
+		Data:    entry.Data,
 	}
-	if f.Prefix == "" {
-		f.Prefix = "log-"
+
+	if f.MessageNoQuote {
+		logEntry.Message = entry.Message // Set as is, will be encoded raw
 	}
-	if f.Timezone == "" {
-		f.Timezone = "UTC"
-	}
-	id := f.Prefix + generator.StringTimestamp(f.Timezone) + generator.RandomString(20)
+
+	jsoniter.ConfigFastest.NewEncoder(buffer).Encode(logEntry)
+
+	return buffer.Bytes(), nil
+}
+
+func getContext() string {
 	_, file, line, ok := runtime.Caller(7)
 	if !ok {
-		file = "unknown"
-		line = 0
+		return "unknown:0"
 	}
 	file = file[strings.LastIndex(file, "/")+1:]
 	pkgLine := fmt.Sprintf("%s:%d", file, line)
 	_, filePlusOne, linePlusOne, okPlusOne := runtime.Caller(8)
 	if !okPlusOne {
-		file = "unknown"
-		line = 0
+		return "unknown:0"
 	}
 	filePlusOne = filePlusOne[strings.LastIndex(filePlusOne, "/")+1:]
 	pkgLinePlusOne := fmt.Sprintf("%s:%d", filePlusOne, linePlusOne)
-	output = strings.Replace(output, "%id%", id, 1)
-	output = strings.Replace(output, "%time%", entry.Time.In(generator.GetLocation(f.Timezone)).Format(timestampFormat), 1)
-	output = strings.Replace(output, "%msg%", entry.Message, 1)
-	output = strings.Replace(output, "%context%", pkgLine+"("+pkgLinePlusOne+")", 1)
-	output = strings.Replace(output, "%lvl%", entry.Level.String(), 1)
-
-	for k, val := range entry.Data {
-		switch v := val.(type) {
-		case string:
-			output = strings.Replace(output, "%"+k+"%", v, 1)
-		case int:
-			s := strconv.Itoa(v)
-			output = strings.Replace(output, "%"+k+"%", s, 1)
-		case bool:
-			s := strconv.FormatBool(v)
-			output = strings.Replace(output, "%"+k+"%", s, 1)
-		}
-	}
-
-	return []byte(output), nil
+	return pkgLine + "(" + pkgLinePlusOne + ")"
 }
