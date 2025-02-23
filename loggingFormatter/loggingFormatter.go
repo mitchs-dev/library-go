@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	jsoniter "github.com/json-iterator/go"
 	"github.com/mitchs-dev/library-go/generator"
@@ -98,8 +99,12 @@ type JSONFormatter struct {
 }
 
 // NewJSONFormatter creates a new JSONFormatter
-func NewJSONFormatter() *JSONFormatter {
+func NewJSONFormatter(timestampFormat string, prefix string, timezone string, messageNoQuote bool) *JSONFormatter {
 	return &JSONFormatter{
+		TimestampFormat: timestampFormat,
+		Prefix:          prefix,
+		Timezone:        timezone,
+		MessageNoQuote:  messageNoQuote,
 		bufferPool: &sync.Pool{
 			New: func() interface{} {
 				return new(bytes.Buffer)
@@ -132,17 +137,29 @@ func (f *JSONFormatter) Format(entry *logrus.Entry) ([]byte, error) {
 	buffer.Reset()
 	defer f.bufferPool.Put(buffer)
 
+	// Format the timezone
+	timezone, err := time.LoadLocation(f.Timezone)
+	if err != nil {
+		timezone, _ = time.LoadLocation("UTC")
+	}
+
+	// Set the timestamp
+	timestampFormat := f.TimestampFormat
+	if timestampFormat == "" {
+		timestampFormat = time.RFC3339
+	}
+
 	logEntry := LogEntry{
 		ID:      f.Prefix + generator.StringTimestamp(f.Timezone) + generator.RandomString(20),
-		Time:    entry.Time.UTC().Format(f.TimestampFormat),
+		Time:    entry.Time.In(timezone).Format(timestampFormat),
 		Level:   entry.Level.String(),
-		Message: entry.Message, // Initially set as string
+		Message: entry.Message,
 		Context: getContext(),
 		Data:    entry.Data,
 	}
 
 	if f.MessageNoQuote {
-		logEntry.Message = entry.Message // Set as is, will be encoded raw
+		logEntry.Message = entry.Message
 	}
 
 	jsoniter.ConfigFastest.NewEncoder(buffer).Encode(logEntry)
