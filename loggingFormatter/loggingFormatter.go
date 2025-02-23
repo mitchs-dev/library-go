@@ -114,7 +114,7 @@ func (f *JSONFormatter) Format(entry *logrus.Entry) ([]byte, error) {
 	if f.Timezone == "" {
 		f.Timezone = "UTC"
 	}
-	id := f.Prefix + generator.StringTimestamp(f.Timezone) + generator.RandomString(7)
+	id := f.Prefix + generator.StringTimestamp(f.Timezone) + generator.RandomString(20)
 	_, file, line, ok := runtime.Caller(7)
 	if !ok {
 		file = "unknown"
