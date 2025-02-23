@@ -1,11 +1,43 @@
 // packageName: jwt
 
 /*
-Package jwt provides functions for JWT token manipulation
+Package jwt provides functions for generating and validating JSON Web Tokens (JWTs).
+
+It supports HS256, RS256, and ES256 algorithms.
+
+Usage:
+
+1. Initialize the package using InitializeJWT, providing key management options.
+2. Generate JWTs using GenerateToken.
+3. Validate JWTs using ValidateToken.
+
+Example:
+
+// Initialization
+keys, pubKeys, err := jwt.InitializeJWT(true, []jwt.JWTAlgorithm{jwt.HS256, jwt.RS256, jwt.ES256}, nil, nil)
+
+	if err != nil {
+	    // Handle error
+	}
+
+// Token Generation
+token, exp, err := jwt.GenerateToken(jwt.HS256, "UTC", "1h", "issuer", "subject", "audience", "data")
+
+	if err != nil {
+	    // Handle error
+	}
+
+// Token Validation
+valid, err := jwt.ValidateToken(token, "issuer", "audience", "UTC")
+
+	if err != nil {
+	    // Handle error
+	}
 */
 package jwt
 
 import (
+	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/hmac"
@@ -17,7 +49,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"hash"
+	"math/big"
 	"time"
 
 	"github.com/mitchs-dev/library-go/generator"
@@ -29,13 +61,18 @@ import (
 type JWTAlgorithm string
 
 const (
-	// HS256 is the HMAC SHA-256 algorithm
+	// HS256 is the HMAC SHA-256 algorithm, using a shared secret.
 	HS256 = JWTAlgorithm("HS256")
+	// RS256 is the RSA Signature with SHA-256 algorithm, using a public/private key pair.
 	RS256 = JWTAlgorithm("RS256")
+	// ES256 is the ECDSA Signature with P-256 and SHA-256 algorithm, using a public/private key pair.
 	ES256 = JWTAlgorithm("ES256")
 )
 
+// AlgoKeysStruct maps JWT algorithms to their respective private keys (base64 encoded).
 type AlgoKeysStruct map[JWTAlgorithm]string
+
+// PubKeysStruct maps JWT algorithms to their respective public keys (base64 encoded).
 type PubKeysStruct map[JWTAlgorithm]string
 
 var (
@@ -44,9 +81,9 @@ var (
 	jwtInitialized bool
 )
 
-// InitializeJWT initializes the JWT token generation and validation
-// If you would like to generate new keys, set generateKeys to true and existingKeys to nil
-// If you would like to use existing keys, set generateKeys to false and provide the existing keys
+// InitializeJWT initializes the JWT package with keys for generating and validating tokens.
+// If generateKeys is true, new keys are generated for the specified algorithms.
+// If generateKeys is false, existingKeys and existingPubKeys must be provided.
 func InitializeJWT(generateKeys bool, algorithms []JWTAlgorithm, existingKeys AlgoKeysStruct, existingPubKeys PubKeysStruct) (AlgoKeysStruct, PubKeysStruct, error) {
 	// Check if JWT has already been initialized
 	if jwtInitialized {
@@ -164,32 +201,29 @@ func runGenerateKeys(algorithm JWTAlgorithm) (string, string, error) {
 	return key, pubKey, nil
 }
 
-// JWTToken struct for JWT token
+// JWTToken represents a parsed or generated JWT.
 type JWTToken struct {
-	Header    jwtTokenHeader  `json:"header"`
-	Payload   jwtTokenPayload `json:"payload"`
-	Signature string          `json:"signature"`
+	Header    jwtTokenHeader  `json:"header"`    // JWT header
+	Payload   jwtTokenPayload `json:"payload"`   // JWT payload
+	Signature string          `json:"signature"` // JWT signature (base64 encoded)
 }
 
-// jwtTokenHeader struct for JWT token header
+// jwtTokenHeader represents the JWT header.
 type jwtTokenHeader struct {
-	Algorithm JWTAlgorithm `json:"algorithm"`
-	Type      string       `json:"type"`
+	Algorithm JWTAlgorithm `json:"algorithm"` // Algorithm used for signing
+	Type      string       `json:"type"`      // Token type (e.g., "JWT")
 }
 
-// jwtTokenPayload struct for JWT token payload
+// jwtTokenPayload represents the JWT payload.
 type jwtTokenPayload struct {
-	// Stored in epoch timestamp
-	ExpirationTime int64 `json:"expirationTime"`
-	// Stored in epoch timestamp
-	IssuedAt int64 `json:"issuedAt"`
-	// Stored in epoch timestamp
-	NotBefore int64  `json:"notBefore"`
-	Issuer    string `json:"issuer"`
-	Subject   string `json:"subject"`
-	Audience  string `json:"audience"`
-	JwtID     string `json:"jwtID"`
-	Data      string `json:"data"`
+	ExpirationTime int64  `json:"expirationTime"` // Expiration time (Unix timestamp)
+	IssuedAt       int64  `json:"issuedAt"`       // Issued at time (Unix timestamp)
+	NotBefore      int64  `json:"notBefore"`      // Not before time (Unix timestamp)
+	Issuer         string `json:"issuer"`         // Issuer of the token
+	Subject        string `json:"subject"`        // Subject of the token
+	Audience       string `json:"audience"`       // Audience of the token
+	JwtID          string `json:"jwtID"`          // Unique JWT ID
+	Data           string `json:"data"`           // Custom data payload
 }
 
 // ParseToken uses a JWT token string to parse the token into a JWTToken struct
@@ -238,7 +272,8 @@ func GetAudience(tokenString string) (string, error) {
 	return jwtT.Payload.Audience, nil
 }
 
-// Validate token uses a JWT token string and a signing key to validate the token
+// ValidateToken validates a JWT token against the provided issuer and audience.
+// It returns true if the token is valid, and false otherwise, along with any error encountered.
 func ValidateToken(targetTokenString, expectedIssuer, expectedAudience, timezone string) (bool, error) {
 
 	var jwtT JWTToken
@@ -247,19 +282,22 @@ func ValidateToken(targetTokenString, expectedIssuer, expectedAudience, timezone
 	jwtT.parseToken(targetTokenString)
 
 	// Generate signature
-	generatedSignature, err := generateSignature(jwtT.Header.Algorithm, jwtT.Header, jwtT.Payload)
+	log.Debug("Validating signature")
+	generatedSignature, err := generateSignature(jwtT.Header.Algorithm, jwtT.Header, jwtT.Payload, jwtT.Signature, true)
 	if err != nil {
 		return false, err
 	}
 
-	// Compare generated signature with token signature
-	if generatedSignature != jwtT.Signature {
-		err := errors.New("token invalid: signature mismatch ")
-		log.Debug("Got: " + generatedSignature)
-		log.Debug("Expected: " + jwtT.Signature)
-		return false, err
-	} else {
-		log.Debug("Signature is valid")
+	if jwtT.Header.Algorithm == HS256 {
+		// Compare generated signature with token signature
+		if generatedSignature != jwtT.Signature {
+			err := errors.New("token invalid: signature mismatch ")
+			log.Debug("Got: " + generatedSignature)
+			log.Debug("Expected: " + jwtT.Signature)
+			return false, err
+		} else {
+			log.Debug("Signature is valid")
+		}
 	}
 
 	// Verify exp
@@ -311,13 +349,9 @@ func ValidateToken(targetTokenString, expectedIssuer, expectedAudience, timezone
 	return true, nil
 }
 
-func generateSignature(algorithm JWTAlgorithm, header jwtTokenHeader, payload jwtTokenPayload) (string, error) {
-
-	// Get the key for the algorithm
-	key, ok := keys[algorithm]
-	if !ok {
-		return "", errors.New("key not found for algorithm")
-	}
+// generateSignature generates a signature for the JWT token based on the provided algorithm.
+// validateOrGenerate determines whether the function is used for validation or generation (RSA and ECDSA only).
+func generateSignature(algorithm JWTAlgorithm, header jwtTokenHeader, payload jwtTokenPayload, signature string, validateOrGenerate bool) (string, error) {
 
 	jsonHeaderByte, err := json.Marshal(header)
 	if err != nil {
@@ -336,35 +370,117 @@ func generateSignature(algorithm JWTAlgorithm, header jwtTokenHeader, payload jw
 	data = append(data, jsonHeaderByte...)
 	data = append(data, jsonPayloadByte...)
 
-	var hasher hash.Hash
-
 	// Switch on the algorithm to determine the hash function
 	switch algorithm {
 	case HS256:
-		hasher = hmac.New(sha256.New, []byte(key))
+		// Get the key for the algorithm
+		key, ok := keys[algorithm]
+		if !ok {
+			return "", errors.New("key not found for algorithm")
+		}
+		hasher := hmac.New(sha256.New, []byte(key))
+
+		// Write the data to the HMAC hash
+		_, err = hasher.Write(data)
+		if err != nil {
+			return "", fmt.Errorf("failed to write data to HMAC: %w", err)
+		}
+
+		// Compute the HMAC signature
+		signature := hasher.Sum(nil)
+
+		// Return the signature as a base64 URL encoded string
+		return base64.RawURLEncoding.EncodeToString(signature), nil
 	case RS256:
-		hasher = sha256.New()
+		if !validateOrGenerate {
+			x509PrivKey, err := base64.RawURLEncoding.DecodeString(keys[algorithm])
+			if err != nil {
+				return "", fmt.Errorf("failed to decode RSA key: %w", err)
+			}
+			privateKey, err := x509.ParsePKCS1PrivateKey(x509PrivKey)
+			if err != nil {
+				return "", fmt.Errorf("failed to parse RSA key: %w", err)
+			}
+			hashed := sha256.Sum256(data)
+			signature, err := rsa.SignPKCS1v15(rand.Reader, privateKey, crypto.SHA256, hashed[:])
+			if err != nil {
+				return "", fmt.Errorf("failed to sign data: %w", err)
+			}
+			return base64.RawURLEncoding.EncodeToString(signature), nil
+
+		} else {
+
+			signatureBytes, err := base64.RawURLEncoding.DecodeString(signature)
+			if err != nil {
+				return "", fmt.Errorf("failed to decode RSA signature: %w", err)
+			}
+
+			hashed := sha256.Sum256(data)
+
+			x509PubKey, err := base64.RawURLEncoding.DecodeString(publicKeys[algorithm])
+			if err != nil {
+				return "", fmt.Errorf("failed to decode RSA public key: %w", err)
+			}
+			publicKey, err := x509.ParsePKIXPublicKey(x509PubKey)
+			if err != nil {
+				return "", fmt.Errorf("failed to parse RSA public key: %w", err)
+			}
+			err = rsa.VerifyPKCS1v15(publicKey.(*rsa.PublicKey), crypto.SHA256, hashed[:], signatureBytes)
+			if err != nil {
+				return "", fmt.Errorf("failed to verify RSA signature: %w", err)
+			}
+			return base64.RawURLEncoding.EncodeToString(signatureBytes), nil
+
+		}
 
 	case ES256:
-		hasher = sha256.New()
+		if !validateOrGenerate {
+			x509PrivKey, err := base64.RawURLEncoding.DecodeString(keys[algorithm])
+			if err != nil {
+				return "", fmt.Errorf("failed to decode ECDSA key: %w", err)
+			}
+			privateKey, err := x509.ParseECPrivateKey(x509PrivKey)
+			if err != nil {
+				return "", fmt.Errorf("failed to parse ECDSA key: %w", err)
+			}
+			hashed := sha256.Sum256(data)
+			r, s, err := ecdsa.Sign(rand.Reader, privateKey, hashed[:])
+			if err != nil {
+				return "", fmt.Errorf("failed to sign data: %w", err)
+			}
+			signature := append(r.Bytes(), s.Bytes()...)
+			return base64.RawURLEncoding.EncodeToString(signature), nil
+		} else {
+
+			signatureBytes, err := base64.RawURLEncoding.DecodeString(signature)
+			if err != nil {
+				return "", fmt.Errorf("failed to decode ECDSA signature: %w", err)
+			}
+
+			x509PubKey, err := base64.RawURLEncoding.DecodeString(publicKeys[algorithm])
+			if err != nil {
+				return "", fmt.Errorf("failed to decode ECDSA public key: %w", err)
+			}
+			publicKey, err := x509.ParsePKIXPublicKey(x509PubKey)
+			if err != nil {
+				return "", fmt.Errorf("failed to parse ECDSA public key: %w", err)
+			}
+			hashed := sha256.Sum256(data)
+			r := new(big.Int).SetBytes(signatureBytes[:len(signatureBytes)/2])
+			s := new(big.Int).SetBytes(signatureBytes[len(signatureBytes)/2:])
+			if !ecdsa.Verify(publicKey.(*ecdsa.PublicKey), hashed[:], r, s) {
+				return "", errors.New("failed to verify ECDSA signature")
+			}
+			return base64.RawURLEncoding.EncodeToString(signatureBytes), nil
+		}
+
 	default:
-		hasher = sha256.New()
+		return "", errors.New("unsupported algorithm: " + string(algorithm))
 	}
-
-	// Write the data to the HMAC hash
-	_, err = hasher.Write(data)
-	if err != nil {
-		return "", fmt.Errorf("failed to write data to HMAC: %w", err)
-	}
-
-	// Compute the HMAC signature
-	signature := hasher.Sum(nil)
-
-	// Return the signature as a base64 URL encoded string
-	return base64.RawURLEncoding.EncodeToString(signature), nil
 }
 
-// Generate token generates a JWT token and returns the encoded token data, token SHA256, and expiration time (in the respective order)
+// GenerateToken generates a JWT token with the specified algorithm and claims.
+// It returns the encoded token, expiration time, and any error encountered.
 func GenerateToken(algorithm JWTAlgorithm, timeZone string, timeoutPeriod string, issuer string, subject string, audience string, data string) (string, int64, error) {
 
 	// Convert timeout period (in common time units) to seconds
@@ -404,7 +520,8 @@ func GenerateToken(algorithm JWTAlgorithm, timeZone string, timeoutPeriod string
 	newTokenData.Payload.Data = data
 
 	// Generate signature
-	signature, err := generateSignature(algorithm, newTokenData.Header, newTokenData.Payload)
+	log.Debug("Generating signature")
+	signature, err := generateSignature(algorithm, newTokenData.Header, newTokenData.Payload, "", false)
 	if err != nil {
 		return "", 0, err
 	}
