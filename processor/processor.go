@@ -6,64 +6,55 @@ Package processor provides functions for file and directory manipulation
 package processor
 
 import (
-	"bufio"
-	"errors"
 	"fmt"
-	"net/http"
-	"net/url"
+	"io"
 	"os"
-	"strings"
+	"sync"
 
 	cp "github.com/otiai10/copy"
 	log "github.com/sirupsen/logrus"
 )
 
-var Filename string
+var bufPool = sync.Pool{
+	New: func() interface{} {
+		buf := make([]byte, 32*1024)
+		return &buf
+	},
+}
 
-/*
-Uploading + tmpdir cleanup functions
-*/
+// ProcessFilesConcurrently processes files concurrently using a specified function
+func ProcessFilesConcurrently(filePaths []string, processFunc func(string) error, numWorkers int) error {
+	taskCh := make(chan string, len(filePaths))
+	errCh := make(chan error, len(filePaths))
+	var wg sync.WaitGroup
 
-// Use: UploadHandler |DESCRIPTION| Handles file uploaFilenameds and returns the file path and file of the uploaded file |ARGS| w (http.ResponseWriter), r (*http.Request), temporaryUploadsDirectory (string)
-func UploadHandler(w http.ResponseWriter, r *http.Request, temporaryUploadsDirectory string) string {
-	log.Debug("File upload in progress")
-	if r.Method != "PUT" {
-		log.Error("Invalid method: ", r.Method)
-		log.Warn("File Upload cancelled")
-		return "CLIENTERROR,405,Method not allowed"
+	for i := 0; i < numWorkers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for filePath := range taskCh {
+				if err := processFunc(filePath); err != nil {
+					log.Errorf("Error processing file %s: %v", filePath, err)
+					errCh <- err
+				}
+			}
+		}()
 	}
-	file, fileHeader, err := r.FormFile("file")
-	if err != nil {
-		log.Error("Error retrieving file: ", err)
-		return "ERROR"
-	}
-	fileSize := fileHeader.Size
-	buff := make([]byte, fileSize)
-	_, err = file.Read(buff)
-	if err != nil {
-		log.Error("Error reading upload file: ", err)
-		return "ERROR"
-	}
-	// Create the uploads folder if it doesn't
-	// already exist
-	err = os.MkdirAll(temporaryUploadsDirectory, os.ModePerm)
-	if err != nil {
-		log.Error("Error creating uploads folder: ", err)
-		return "ERROR"
-	}
-	Filename = temporaryUploadsDirectory + "/" + fileHeader.Filename
-	// Create a new file in the uploads directory
-	dst, err := os.Create(Filename)
-	if err != nil {
-		log.Error("Error creating file: ", err)
-		return "ERROR"
-	}
-	defer dst.Close()
 
-	os.WriteFile(Filename, buff, 0644)
-	log.Debug("Upload process complete")
-	log.Debug("File uploaded as: ", Filename)
-	return Filename
+	for _, filePath := range filePaths {
+		taskCh <- filePath
+	}
+	close(taskCh)
+
+	wg.Wait()
+	close(errCh)
+
+	if len(errCh) > 0 {
+		//Handle Errors
+		return fmt.Errorf("one or more errors occured")
+	}
+
+	return nil
 }
 
 // Used for cleaning up the temporary uploads directory
@@ -89,159 +80,126 @@ File and directory manipulation functions
 func FileDelete(Filename string) bool {
 	err := os.Remove(Filename)
 	if err != nil {
-		log.Error("Error deleting file: ", err)
+		log.Errorf("Error deleting file %s: %v", Filename, err)
 		return false
 	}
+	log.Debugf("Successfully deleted file %s", Filename)
 	return true
-
 }
 
 // Delete a specified directory
 func DirectoryDelete(directoryName string) bool {
 	err := os.RemoveAll(directoryName)
 	if err != nil {
-		log.Error("Error deleting directory: ", err)
+		log.Errorf("Error deleting directory %s: %v", directoryName, err)
 		return false
 	}
+	log.Debugf("Successfully deleted directory %s", directoryName)
 	return true
 
 }
 
 // Create a specified file with specified contents as a byte array
 func CreateFileAsByte(Filename string, contentType []byte) bool {
-	log.Debug("Creating file: ", Filename)
+	log.Debugf("Creating file: %s", Filename)
 	file, err := os.Create(Filename)
 	if err != nil {
-		log.Error("Error creating file: ", err)
+		log.Errorf("Error creating file: %v", err)
 		return false
 	}
 	err = os.WriteFile(Filename, contentType, 0644)
 	if err != nil {
-		log.Error("Error writing file: ", err)
+		log.Errorf("Error writing file: %v", err)
 		return false
 	}
-	log.Debug("Successfully created file")
+	log.Debugf("Successfully created file: %s", Filename)
 	defer file.Close()
 	return true
 }
 
 // Create a specified file with specified contents as a string
 func CreateFile(Filename string, contentType string) bool {
-	log.Debug("Creating file: ", Filename)
+	log.Debugf("Creating file: %s", Filename)
 	file, err := os.Create(Filename)
 	if err != nil {
-		log.Error("Error creating file: ", err)
+		log.Errorf("Error creating file: %v", err)
 		return false
 	}
+	defer file.Close()
 	err = os.WriteFile(Filename, []byte(contentType), 0644)
 	if err != nil {
-		log.Error("Error writing file: ", err)
+		log.Errorf("Error writing file: %v", err)
 		return false
 	}
-	log.Debug("Successfully created file")
-	defer file.Close()
+	log.Debugf("Successfully created file: %s", Filename)
 	return true
 }
 
 // Create a specified directory
 func CreateDirectory(directoryName string) bool {
-	log.Debug("Creating directory: ", directoryName)
+	log.Debugf("Creating directory: %s", directoryName)
 	err := os.MkdirAll(directoryName, os.ModePerm)
 	if err != nil {
-		log.Error("Error creating directory: ", err)
+		log.Errorf("Error creating directory: %v", err)
 		return false
 	}
-	log.Debug("Successfully created directory")
+	log.Debugf("Successfully created directory: %s", directoryName)
 	return true
 }
 
 // Copy a specified file to a specified destination
 func CopyFile(source string, destination string) bool {
-	log.Debug("Copying file: ", source+" to: "+destination)
-	oldFile, err := os.ReadFile(source)
+	log.Debugf("Copying file: %s to: %s", source, destination)
+	sourceFile, err := os.Open(source)
 	if err != nil {
-		log.Error("Error reading source file: ", err)
+		log.Errorf("Error opening source file: %v", err)
 		return false
 	}
-	file, err := os.Create(destination)
+	defer sourceFile.Close()
+	destFile, err := os.Create(destination)
 	if err != nil {
-		log.Error("Error creating destination file: ", err)
+		log.Errorf("Error creating destination file: %v", err)
 		return false
 	}
-	defer file.Close()
-	err = os.WriteFile(destination, oldFile, 0644)
+	bufPtr := bufPool.Get().(*[]byte)
+	buf := *bufPtr
+	_, err = io.CopyBuffer(destFile, sourceFile, buf)
 	if err != nil {
-		log.Error("Error writing to destination file: ", err)
+		log.Errorf("Error copying file: %v", err)
 		return false
 	}
-	log.Debug("Successfully copied file")
+	bufPool.Put(bufPtr)
+	log.Debugf("Successfully copied file: %s to: %s", source, destination)
 	return true
 }
 
 // Copies a directory to a source destination
 func CopyDirectory(source string, destination string) bool {
-	log.Debug("Copying directory: ", source+" to: "+destination)
+	log.Debugf("Copying directory: %s to: %s", source, destination)
 	err := cp.Copy(source, destination)
 	if err != nil {
-		log.Error("Error copying directory: ", err)
+		log.Errorf("Error copying directory: %v", err)
 		return false
 	}
-	log.Debug("Successfully copied directory")
+	log.Debugf("Successfully copied directory: %s to: %s", source, destination)
 	return true
 }
 
 // Read a specified file and return the contents as a byte array
 func ReadFile(Filename string) []byte {
-	log.Debug("Reading file: ", Filename)
+	log.Debugf("Reading file: %s", Filename)
 	file, err := os.ReadFile(Filename)
 	if err != nil {
-		log.Error("Error reading file: ", err)
+		log.Errorf("Error reading file: %v", err)
 		return nil
 	}
-	log.Debug("Successfully read file")
+	log.Debugf("Successfully read file: %s", Filename)
 	return file
-}
-
-// Provides a count of substrings given from provided string and separator(s)
-func GetSubstringCount(str string, seps ...string) (i int) {
-	for _, sep := range seps {
-		i += strings.Count(str, sep)
-	}
-	return i
-}
-
-// Convert a files contents to url.Values
-func FileToURLValues(filePath string) (url.Values, error) {
-	errorMessagePrefix := "FileToURLValues: "
-	file, err := os.Open(filePath)
-	if err != nil {
-		return nil, errors.New(errorMessagePrefix + err.Error())
-	}
-	defer file.Close()
-
-	values := url.Values{}
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		line := scanner.Text()
-		parts := strings.SplitN(line, "=", 2)
-		if len(parts) != 2 {
-			return nil, errors.New(errorMessagePrefix + fmt.Sprintf("invalid line: %s", line))
-		}
-
-		key := parts[0]
-		value := strings.Trim(parts[1], "'") // remove single quotes if present
-		values.Add(key, value)
-	}
-
-	if err := scanner.Err(); err != nil {
-		return nil, errors.New(errorMessagePrefix + err.Error())
-	}
-
-	return values, nil
 }
 
 // Check if a directory or file exists
 func DirectoryOrFileExists(entryName string) bool {
 	_, err := os.Stat(entryName)
+	log.Debugf("Checking if %s exists", entryName)
 	return !os.IsNotExist(err)
 }
