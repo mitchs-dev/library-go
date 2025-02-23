@@ -146,7 +146,7 @@ func (f *JSONFormatter) Format(entry *logrus.Entry) ([]byte, error) {
 	// Set the timestamp
 	timestampFormat := f.TimestampFormat
 	if timestampFormat == "" {
-		timestampFormat = time.RFC3339
+		timestampFormat = "2006-01-02T15:04:05.000Z07:00"
 	}
 
 	logEntry := LogEntry{
