@@ -181,6 +181,15 @@ func Decrypt(ciphertext interface{}, key []byte, usedBinaryData bool) ([]byte, e
 		}
 		log.Debugf("decryption: Ciphertext is []byte, length: %d", len(ciphertextBytes))
 
+		aad := ciphertextBytes[:8]
+		ciphertextBytes = ciphertextBytes[8:]
+		nonce, ciphertextBytes := ciphertextBytes[:nonceSize], ciphertextBytes[nonceSize:]
+		log.Debugf("Nonce: %v", nonce)
+		plaintext, err := aesgcm.Open(nil, nonce, ciphertextBytes, aad)
+		if err != nil {
+			return nil, fmt.Errorf("decryption: failed to decrypt: %w", err)
+		}
+		return plaintext, nil
 	} else {
 		ciphertextString, ok := ciphertext.(string)
 		if !ok {
@@ -191,17 +200,17 @@ func Decrypt(ciphertext interface{}, key []byte, usedBinaryData bool) ([]byte, e
 		if err != nil {
 			return nil, fmt.Errorf("decryption: failed to decode base64: %w", err)
 		}
-	}
 
-	aad := ciphertextBytes[:8]
-	ciphertextBytes = ciphertextBytes[8:]
-	nonce, ciphertextBytes := ciphertextBytes[:nonceSize], ciphertextBytes[nonceSize:]
-	log.Debugf("Nonce: %v", nonce)
-	plaintext, err := aesgcm.Open(nil, nonce, ciphertextBytes, aad)
-	if err != nil {
-		return nil, fmt.Errorf("decryption: failed to decrypt: %w", err)
+		aad := ciphertextBytes[:8]
+		ciphertextBytes = ciphertextBytes[8:]
+		nonce, ciphertextBytes := ciphertextBytes[:nonceSize], ciphertextBytes[nonceSize:]
+		log.Debugf("Nonce: %v", nonce)
+		plaintext, err := aesgcm.Open(nil, nonce, ciphertextBytes, aad)
+		if err != nil {
+			return nil, fmt.Errorf("decryption: failed to decrypt: %w", err)
+		}
+		return plaintext, nil
 	}
-	return plaintext, nil
 }
 
 // GenerateRandomKey generates a random key of the specified length.
