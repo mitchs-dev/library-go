@@ -149,36 +149,36 @@ func EncryptDeterministic(plaintext []byte, key []byte, useBinaryData bool) (int
 
 	keyValMapKey, ok := appKeyMap[string(key)]
 
-	log.Println("encryption: Acquiring lock")
+	log.Debugf("encryption: Acquiring lock")
 	keyValMapKey.lock.Lock()
-	log.Println("encryption: Lock acquired")
+	log.Debugf("encryption: Lock acquired")
 	var aesgcm cipher.AEAD
 	if !ok {
-		log.Println("encryption: Key not found, initializing cipher")
+		log.Debugf("encryption: Key not found, initializing cipher")
 		aesgcm, err := initCipher(key)
 		if err != nil {
 			log.Fatalf("encryption: Failed to initialize cipher: %v", err)
 		} else {
-			log.Println("encryption: Cipher initialized")
+			log.Debugf("encryption: Cipher initialized")
 			keyValMapKey.cipher = aesgcm
 			keyValMapKey.lock.Unlock()
-			log.Println("encryption: Lock released")
+			log.Debugf("encryption: Lock released")
 			appKeyMap[string(key)] = keyValMapKey
 
 		}
 	} else {
-		log.Println("encryption: Key found")
+		log.Debugf("encryption: Key found")
 	}
 	aesgcm = keyValMapKey.cipher
-	log.Println("encryption: Cipher set")
+	log.Debugf("encryption: Cipher set")
 
 	initNoncePool(aesgcm.NonceSize())
-	log.Println("encryption: Nonce pool initialized")
+	log.Debugf("encryption: Nonce pool initialized")
 
 	if len(key) != aes256KeySize {
 		return nil, invalidKeySizeError
 	}
-	log.Println("encryption: Key size checked")
+	log.Debugf("encryption: Key size checked")
 
 	var nonce []byte
 	// Deterministic nonce: use a hash of the key and plaintext
@@ -202,10 +202,10 @@ func EncryptDeterministic(plaintext []byte, key []byte, useBinaryData bool) (int
 	// If you want to simply return the ciphertext as a byte slice
 	// or if you want to encode it with hex
 	if useBinaryData {
-		log.Println("Returning binary data")
+		log.Debugf("Returning binary data")
 		return ciphertextWithAAD, nil
 	} else {
-		log.Println("Returning encoded data")
+		log.Debugf("Returning encoded data")
 		// Encode with Hex over b64 for performance reasons
 		encodedHex := hex.EncodeToString(ciphertextWithAAD)
 		return encodedHex, nil
