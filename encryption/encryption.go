@@ -9,6 +9,7 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
@@ -68,6 +69,8 @@ func InitEncryption(setNoncePoolSize int) {
 The key should be 32 bytes (256 bits) for AES-256.
 If useBinaryData is true, the ciphertext will be returned as a byte slice.
 The return will be in the format of string (useBinaryData = false) or []byte (useBinaryData = true).
+This function is probabilistic, meaning that the same plaintext and key will not always result in the same ciphertext.
+If you need deterministic encryption, use EncryptDeterministic instead.
 */
 func Encrypt(plaintext []byte, key []byte, useBinaryData bool) (interface{}, error) {
 	if !encryptionInitialized {
@@ -127,6 +130,82 @@ func Encrypt(plaintext []byte, key []byte, useBinaryData bool) (interface{}, err
 		return ciphertextWithAAD, nil
 	} else {
 		log.Debug("Returning encoded data")
+		// Encode with Hex over b64 for performance reasons
+		encodedHex := hex.EncodeToString(ciphertextWithAAD)
+		return encodedHex, nil
+	}
+}
+
+/*
+EncryptDeterministic encrypts the given plaintext using AES-256-GCM with the provided key.
+
+This function is deterministic, meaning that the same plaintext and key will always result in the same ciphertext.
+If you need probabilistic encryption, use Encrypt instead.
+*/
+func EncryptDeterministic(plaintext []byte, key []byte, useBinaryData bool) (interface{}, error) {
+	if !encryptionInitialized {
+		return nil, fmt.Errorf("encryption: encryption not initialized")
+	}
+
+	keyValMapKey, ok := appKeyMap[string(key)]
+
+	log.Println("encryption: Acquiring lock")
+	keyValMapKey.lock.Lock()
+	log.Println("encryption: Lock acquired")
+	var aesgcm cipher.AEAD
+	if !ok {
+		log.Println("encryption: Key not found, initializing cipher")
+		aesgcm, err := initCipher(key)
+		if err != nil {
+			log.Fatalf("encryption: Failed to initialize cipher: %v", err)
+		} else {
+			log.Println("encryption: Cipher initialized")
+			keyValMapKey.cipher = aesgcm
+			keyValMapKey.lock.Unlock()
+			log.Println("encryption: Lock released")
+			appKeyMap[string(key)] = keyValMapKey
+
+		}
+	} else {
+		log.Println("encryption: Key found")
+	}
+	aesgcm = keyValMapKey.cipher
+	log.Println("encryption: Cipher set")
+
+	initNoncePool(aesgcm.NonceSize())
+	log.Println("encryption: Nonce pool initialized")
+
+	if len(key) != aes256KeySize {
+		return nil, invalidKeySizeError
+	}
+	log.Println("encryption: Key size checked")
+
+	var nonce []byte
+	// Deterministic nonce: use a hash of the key and plaintext
+	// This is a simplified example; consider using HKDF for better security.
+	nonce = make([]byte, aesgcm.NonceSize())
+	h := sha256.Sum256(append(key, plaintext...))
+	copy(nonce, h[:aesgcm.NonceSize()])
+
+	log.Printf("Nonce: %v", nonce)
+	// sequenceNumber := getNextSequenceNumber() // Removed
+	aad := make([]byte, 8)
+	binary.LittleEndian.PutUint64(aad, 0) // Always use 0 for deterministic
+	ciphertext := aesgcm.Seal(nil, nonce, plaintext, aad)
+
+	// Append the nonce to the ciphertext
+	ciphertext = append(nonce, ciphertext...)
+
+	// Append the AAD to the ciphertext
+	ciphertextWithAAD := append(aad, ciphertext...)
+
+	// If you want to simply return the ciphertext as a byte slice
+	// or if you want to encode it with hex
+	if useBinaryData {
+		log.Println("Returning binary data")
+		return ciphertextWithAAD, nil
+	} else {
+		log.Println("Returning encoded data")
 		// Encode with Hex over b64 for performance reasons
 		encodedHex := hex.EncodeToString(ciphertextWithAAD)
 		return encodedHex, nil
