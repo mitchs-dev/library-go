@@ -249,8 +249,8 @@ func (t *JWTToken) parseToken(tokenString string) JWTToken {
 }
 
 // Get the expiration time of the token
-func (jwtT *JWTToken) GetExpirationTime(tokenString string) (int64, error) {
-
+func GetExpirationTime(tokenString string) (int64, error) {
+	var jwtT JWTToken
 	jwtT.parseToken(tokenString)
 	if jwtT.Payload.ExpirationTime == 0 {
 		err := errors.New("token invalid: could not parse token")
@@ -259,11 +259,20 @@ func (jwtT *JWTToken) GetExpirationTime(tokenString string) (int64, error) {
 	return jwtT.Payload.ExpirationTime, nil
 }
 
+// Get the JWT ID of the token
+func GetJwtID(tokenString string) (string, error) {
+	var jwtT JWTToken
+	jwtT.parseToken(tokenString)
+	if jwtT.Payload.JwtID == "" {
+		err := errors.New("token invalid: could not parse token")
+		return "", err
+	}
+	return jwtT.Payload.JwtID, nil
+}
+
 // Get the audience of the token
 func GetAudience(tokenString string) (string, error) {
-
 	var jwtT JWTToken
-
 	jwtT.parseToken(tokenString)
 	if jwtT.Payload.Audience == "" {
 		err := errors.New("token invalid: could not parse token")
