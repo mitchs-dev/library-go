@@ -187,7 +187,7 @@ func EncryptDeterministic(plaintext []byte, key []byte, useBinaryData bool) (int
 	h := sha256.Sum256(append(key, plaintext...))
 	copy(nonce, h[:aesgcm.NonceSize()])
 
-	log.Printf("Nonce: %v", nonce)
+	log.Debugf("Nonce: %v", nonce)
 	// sequenceNumber := getNextSequenceNumber() // Removed
 	aad := make([]byte, 8)
 	binary.LittleEndian.PutUint64(aad, 0) // Always use 0 for deterministic
