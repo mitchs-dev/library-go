@@ -153,3 +153,17 @@ func Keys(pattern string, redisConfig RedisConfiguration) ([]string, error) {
 	}
 	return keys, nil
 }
+
+// Exists checks if a key exists
+func Exists(key string, redisConfig RedisConfiguration) (bool, error) {
+
+	rCon := redis.NewClient(RedisOptions(redisConfig))
+	exists, err := rCon.Exists(key).Result()
+	if err != nil {
+		return false, err
+	}
+	if exists == 1 {
+		return true, nil
+	}
+	return false, nil
+}
