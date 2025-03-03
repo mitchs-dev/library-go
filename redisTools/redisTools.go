@@ -7,6 +7,7 @@ package redisTools
 
 import (
 	"errors"
+	"time"
 
 	"github.com/go-redis/redis"
 	"github.com/mitchs-dev/library-go/encryption"
@@ -72,10 +73,18 @@ func TestAccess(redisConfig RedisConfiguration) error {
 }
 
 // Set a value in Redis
-func Set(key string, value string, expiration int, redisConfig RedisConfiguration) error {
-
+func Set(key string, value string, expirationInHours int, redisConfig RedisConfiguration) error {
+	expirationToDuration := time.Duration(expirationInHours) * time.Hour
 	rCon := redis.NewClient(RedisOptions(redisConfig))
-	err := rCon.Set(key, value, 0).Err()
+	// If expiration is 0, set the key without expiration
+	if expirationInHours == 0 {
+		err := rCon.Set(key, value, 0).Err()
+		if err != nil {
+			return err
+		}
+		return nil
+	}
+	err := rCon.Set(key, value, expirationToDuration).Err()
 	if err != nil {
 		return err
 	}
@@ -105,7 +114,7 @@ func Del(key string, redisConfig RedisConfiguration) error {
 }
 
 // Set a value in Redis with encryption
-func ESet(key string, value string, expiration int, redisConfig RedisConfiguration) error {
+func ESet(key string, value string, expirationInHours int, redisConfig RedisConfiguration) error {
 
 	redisEncryptionKey := redisConfig.Encryption.Key
 	if redisEncryptionKey == nil {
@@ -117,7 +126,16 @@ func ESet(key string, value string, expiration int, redisConfig RedisConfigurati
 	if err != nil {
 		return err
 	}
-	err = rCon.Set(key, encValue, 0).Err()
+	expirationToDuration := time.Duration(expirationInHours) * time.Hour
+	// If expiration is 0, set the key without expiration
+	if expirationInHours == 0 {
+		err = rCon.Set(key, encValue, 0).Err()
+		if err != nil {
+			return err
+		}
+		return nil
+	}
+	err = rCon.Set(key, encValue, expirationToDuration).Err()
 	if err != nil {
 		return err
 	}
