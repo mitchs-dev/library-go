@@ -270,6 +270,17 @@ func GetJwtID(tokenString string) (string, error) {
 	return jwtT.Payload.JwtID, nil
 }
 
+// Get the subject of the token
+func GetSubject(tokenString string) (string, error) {
+	var jwtT JWTToken
+	jwtT.parseToken(tokenString)
+	if jwtT.Payload.Subject == "" {
+		err := errors.New("token invalid: could not parse token")
+		return "", err
+	}
+	return jwtT.Payload.Subject, nil
+}
+
 // Get the audience of the token
 func GetAudience(tokenString string) (string, error) {
 	var jwtT JWTToken
