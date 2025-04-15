@@ -106,6 +106,12 @@ func (r *RedisClient) Set(key string, value string, expirationInHours int) error
 	return r.client.Set(key, value, expirationToDuration).Err()
 }
 
+// Set a value in Redis with a time.Duration instead of int
+func (r *RedisClient) SetT(key string, value string, expiration time.Duration) error {
+
+	return r.client.Set(key, value, expiration).Err()
+}
+
 // Get a value from Redis
 func (r *RedisClient) Get(key string) (string, error) {
 	return r.client.Get(key).Result()
@@ -128,13 +134,23 @@ func (r *RedisClient) ESet(key string, value string, expirationInHours int) erro
 	if err != nil {
 		return err
 	}
-
 	expirationToDuration := time.Duration(expirationInHours) * time.Hour
-	// If expiration is 0, set the key without expiration
-	if expirationInHours == 0 {
-		return r.client.Set(key, encValue, 0).Err()
-	}
 	return r.client.Set(key, encValue, expirationToDuration).Err()
+}
+
+// Set a value in Redis with encryption and a time.Duration instead of int
+func (r *RedisClient) ESetT(key string, value string, expiration time.Duration) error {
+	redisEncryptionKey := r.config.Encryption.Key
+	if redisEncryptionKey == nil {
+		return errors.New("redis encryption key variable is empty")
+	}
+
+	valueBytes := []byte(value)
+	encValue, err := encryption.Encrypt(valueBytes, redisEncryptionKey, false)
+	if err != nil {
+		return err
+	}
+	return r.client.Set(key, encValue, expiration).Err()
 }
 
 // Get a value from Redis with encryption
