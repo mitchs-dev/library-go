@@ -1,11 +1,13 @@
 module github.com/mitchs-dev/library-go
 
-go 1.22.1
+go 1.23.0
+
 toolchain go1.23.7
 
 require (
 	github.com/dgraph-io/badger v1.6.2
 	github.com/go-redis/redis v6.15.9+incompatible
+	github.com/google/uuid v1.6.0
 	github.com/inhies/go-bytesize v0.0.0-20220417184213-4913239db9cf
 	github.com/json-iterator/go v1.1.12
 	github.com/mitchs-dev/build-struct v1.2.1
