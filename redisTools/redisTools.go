@@ -108,7 +108,6 @@ func (r *RedisClient) Set(key string, value string, expirationInHours int) error
 
 // Set a value in Redis with a time.Duration instead of int
 func (r *RedisClient) SetT(key string, value string, expiration time.Duration) error {
-
 	return r.client.Set(key, value, expiration).Err()
 }
 
@@ -184,6 +183,47 @@ func (r *RedisClient) Exists(key string) (bool, error) {
 		return false, err
 	}
 	return exists == 1, nil
+}
+
+// LPush pushes a value to the left of a list returning an err if it fails
+func (r *RedisClient) LPush(key string, value string) error {
+	response := r.client.LPush(key, value)
+	if response.Err() != nil {
+		return response.Err()
+	}
+	return nil
+}
+
+// RPop pops a value from the right of a list returning the value and an err if it fails
+func (r *RedisClient) RPop(key string) (string, error) {
+	response := r.client.RPop(key)
+	if response.Err() != nil {
+		return "", response.Err()
+	}
+	return response.Val(), nil
+}
+
+// BRPop pops a value from the right of a list blocking for a specified duration
+//
+// Note: This will only return the very rightmost value in the list, not all values
+func (r *RedisClient) BRPop(key string, timeout time.Duration) (string, error) {
+	response := r.client.BRPop(timeout, key)
+	if response.Err() != nil {
+		return "", response.Err()
+	}
+	if len(response.Val()) < 2 {
+		return "", errors.New("no value returned from BRPop")
+	}
+	return response.Val()[1], nil
+}
+
+// LLen returns the length of a list
+func (r *RedisClient) LLen(key string) (int64, error) {
+	response := r.client.LLen(key)
+	if response.Err() != nil {
+		return 0, response.Err()
+	}
+	return response.Val(), nil
 }
 
 // For backwards compatibility, these functions create a temporary client
