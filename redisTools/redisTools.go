@@ -212,7 +212,7 @@ func (r *RedisClient) BRPop(key string, timeout time.Duration) (string, error) {
 		return "", response.Err()
 	}
 	if len(response.Val()) < 2 {
-		return "", errors.New("no value returned from BRPop")
+		return "", errors.New("BRPop response must include both the key and the value, but the response was shorter than expected")
 	}
 	return response.Val()[1], nil
 }
