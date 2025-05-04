@@ -226,6 +226,24 @@ func (r *RedisClient) LLen(key string) (int64, error) {
 	return response.Val(), nil
 }
 
+// TTL (seconds) returns the time to live of a key in time.Duration
+func (r *RedisClient) TTL(key string) (time.Duration, error) {
+	response := r.client.TTL(key)
+	if response.Err() != nil {
+		return 0, response.Err()
+	}
+	return response.Val(), nil
+}
+
+// PTTL (milliseconds) returns the time to live of a key in  time.Duration
+func (r *RedisClient) PTTL(key string) (time.Duration, error) {
+	response := r.client.PTTL(key)
+	if response.Err() != nil {
+		return 0, response.Err()
+	}
+	return response.Val(), nil
+}
+
 // For backwards compatibility, these functions create a temporary client
 
 // Set a value in Redis (legacy function)
