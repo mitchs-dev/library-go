@@ -226,7 +226,7 @@ func (r *RedisClient) LLen(key string) (int64, error) {
 	return response.Val(), nil
 }
 
-// TTL returns the time to live of a key in seconds
+// TTL (seconds) returns the time to live of a key in time.Duration
 func (r *RedisClient) TTL(key string) (time.Duration, error) {
 	response := r.client.TTL(key)
 	if response.Err() != nil {
@@ -235,7 +235,7 @@ func (r *RedisClient) TTL(key string) (time.Duration, error) {
 	return response.Val(), nil
 }
 
-// PTTL returns the time to live of a key in milliseconds
+// PTTL (milliseconds) returns the time to live of a key in  time.Duration
 func (r *RedisClient) PTTL(key string) (time.Duration, error) {
 	response := r.client.PTTL(key)
 	if response.Err() != nil {
