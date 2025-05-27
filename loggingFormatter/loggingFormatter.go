@@ -94,14 +94,16 @@ type JSONFormatter struct {
 	Prefix          string // Prefix to write at the beginning of each line
 	Timezone        string // Timezone to use for timestamps
 	LogFormat       string // Format string for log output
+	CorrelationID   string // Correlation ID to include in logs
 	MessageNoQuote  bool   // If true, don't put the message field in quotes
 	bufferPool      *sync.Pool
 }
 
 // NewJSONFormatter creates a new JSONFormatter
-func NewJSONFormatter(timestampFormat string, prefix string, timezone string, messageNoQuote bool) *JSONFormatter {
+func NewJSONFormatter(timestampFormat string, correlationID string, prefix string, timezone string, messageNoQuote bool) *JSONFormatter {
 	return &JSONFormatter{
 		TimestampFormat: timestampFormat,
+		CorrelationID:   correlationID,
 		Prefix:          prefix,
 		Timezone:        timezone,
 		MessageNoQuote:  messageNoQuote,
@@ -115,12 +117,13 @@ func NewJSONFormatter(timestampFormat string, prefix string, timezone string, me
 
 // LogEntry is the log entry structure for JSONFormatter
 type LogEntry struct {
-	ID      string        `json:"id"`
-	Time    string        `json:"time"`
-	Level   string        `json:"level"`
-	Context string        `json:"context"`
-	Message string        `json:"message"`
-	Data    logrus.Fields `json:"data,omitempty"`
+	ID            string        `json:"id"`
+	Time          string        `json:"time"`
+	Level         string        `json:"level"`
+	CorrelationID string        `json:"correlation,omitempty"`
+	Context       string        `json:"context"`
+	Message       string        `json:"message"`
+	Data          logrus.Fields `json:"data,omitempty"`
 }
 
 // Use: loggingFormatter.JSONFormatter{} (Struct) |DESCRIPTION| Format renders a single log entry as JSON |ARGS| Prefix (string), Timezone (string), MessageNoQuote (bool)
@@ -150,12 +153,13 @@ func (f *JSONFormatter) Format(entry *logrus.Entry) ([]byte, error) {
 	}
 
 	logEntry := LogEntry{
-		ID:      f.Prefix + generator.StringTimestamp(f.Timezone) + generator.RandomString(20),
-		Time:    entry.Time.In(timezone).Format(timestampFormat),
-		Level:   entry.Level.String(),
-		Message: entry.Message,
-		Context: getCallerContext(),
-		Data:    entry.Data,
+		ID:            f.Prefix + generator.StringTimestamp(f.Timezone) + generator.RandomString(20),
+		Time:          entry.Time.In(timezone).Format(timestampFormat),
+		Level:         entry.Level.String(),
+		Message:       entry.Message,
+		Context:       getCallerContext(),
+		CorrelationID: f.CorrelationID,
+		Data:          entry.Data,
 	}
 
 	if f.MessageNoQuote {
