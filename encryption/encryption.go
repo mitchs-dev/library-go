@@ -30,9 +30,9 @@ import (
 type errInvalidKeySize string
 
 // keyMap is a map of keys to their corresponding AES-GCM ciphers.
-type keyMap map[string]struct {
+type keyMap map[string]*struct {
 	cipher cipher.AEAD
-	locks  keyLocks
+	locks  *keyLocks
 }
 
 type keyLocks struct {
@@ -59,6 +59,7 @@ var (
 	appKeyMap             keyMap
 	localDisloMutexMap    disloMutexMap
 	appKeyMapMutex        sync.Mutex
+	initEncryptionOnce    sync.Once
 	lockTimeout           = 5 * time.Second // Default timeout for Dislo locks
 )
 
@@ -225,16 +226,16 @@ func DeleteDisloLock(disloConfig *DisloConfig) error {
 
 // InitEncryption should be run before any (de)encryption operations.
 func InitEncryption(setNoncePoolSize int) {
-	if noncePoolSize == 0 {
-		noncePoolSize = noncePoolSizeDefault
-	} else {
-		noncePoolSize = setNoncePoolSize
-	}
-	// Make the key map
-	appKeyMap = newKeyMap()
-
-	log.Debugf("Encryption initialized with nonce pool size: %d", noncePoolSize)
-	encryptionInitialized = true
+	initEncryptionOnce.Do(func() {
+		if noncePoolSize == 0 {
+			noncePoolSize = noncePoolSizeDefault
+		} else {
+			noncePoolSize = setNoncePoolSize
+		}
+		appKeyMap = newKeyMap()
+		log.Debugf("Encryption initialized with nonce pool size: %d", noncePoolSize)
+		encryptionInitialized = true
+	})
 }
 
 // Lock acquires a lock for the key map.
@@ -323,7 +324,7 @@ func Encrypt(plaintext []byte, key []byte, useBinaryData bool) (interface{}, err
 		} else {
 			log.Debugf("encryption: Cipher initialized")
 			keyValMapKey.cipher = aesgcm
-			keyValMapKey.locks = keyLocks{}
+			keyValMapKey.locks = &keyLocks{}
 			appKeyMap[string(key)] = keyValMapKey
 
 		}
@@ -335,6 +336,9 @@ func Encrypt(plaintext []byte, key []byte, useBinaryData bool) (interface{}, err
 	aesgcm = keyValMapKey.cipher
 	log.Debugf("encryption: Cipher set")
 
+	if keyValMapKey.locks == nil {
+		return nil, fmt.Errorf("encryption: locks not initialized for key %s", string(key))
+	}
 	if err := keyValMapKey.locks.lock(key); err != nil {
 		return nil, err
 	}
@@ -402,7 +406,7 @@ func EncryptDeterministic(plaintext []byte, key []byte, useBinaryData bool) (int
 		} else {
 			log.Debugf("encryption: Cipher initialized")
 			keyValMapKey.cipher = aesgcm
-			keyValMapKey.locks = keyLocks{}
+			keyValMapKey.locks = &keyLocks{}
 			appKeyMap[string(key)] = keyValMapKey
 
 		}
@@ -413,7 +417,9 @@ func EncryptDeterministic(plaintext []byte, key []byte, useBinaryData bool) (int
 
 	aesgcm = keyValMapKey.cipher
 	log.Debugf("encryption: Cipher set")
-
+	if keyValMapKey.locks == nil {
+		return nil, fmt.Errorf("encryption: locks not initialized for key %s", string(key))
+	}
 	if err := keyValMapKey.locks.lock(key); err != nil {
 		return nil, err
 	}
@@ -499,9 +505,9 @@ func Decrypt(ciphertext interface{}, key []byte, usedBinaryData bool) ([]byte, e
 	}
 	appKeyMapMutex.Unlock()
 
-	log.Debug("decryption: Cipher set")
-
-	log.Debug("decryption: Acquiring lock")
+	if keyValMapKey.locks == nil {
+		return nil, fmt.Errorf("encryption: locks not initialized for key %s", string(key))
+	}
 	if err := keyValMapKey.locks.lock(key); err != nil {
 		return nil, err
 	}
@@ -510,9 +516,6 @@ func Decrypt(ciphertext interface{}, key []byte, usedBinaryData bool) ([]byte, e
 			log.Error(err)
 		}
 	}()
-	log.Debug("decryption: Lock acquired")
-
-	log.Debug("decryption: Lock released")
 
 	var ciphertextBytes []byte
 
