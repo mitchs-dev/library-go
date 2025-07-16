@@ -143,7 +143,20 @@ func InitializeDisloLock(disloConfigMap []*DisloConfig) {
 		log.Debugf("encryption: Dislo lock initialized for ID: %s", disloConfig.DisloLockID)
 	}
 
-	localDisloMutexMap = initDisloMutexMap
+	if localDisloMutexMap == nil {
+		localDisloMutexMap = initDisloMutexMap
+	} else {
+		// Merge the new Dislo mutex map with the existing one
+		for key, value := range initDisloMutexMap {
+			_, ok := localDisloMutexMap[key]
+			if !ok {
+				localDisloMutexMap[key] = value
+			} else {
+				log.Warnf("encryption: Dislo lock for key %s already exists, skipping initialization", key)
+			}
+		}
+	}
+
 	log.Debugf("encryption: Dislo locks initialized with %d keys", len(localDisloMutexMap))
 }
 
