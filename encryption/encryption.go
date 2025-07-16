@@ -45,22 +45,22 @@ func (e errInvalidKeySize) Error() string {
 }
 
 var (
-	invalidKeySizeError = errInvalidKeySize("encryption: invalid key size")
-	// aesgcm is the AES-GCM cipher.
-	aesgcm                cipher.AEAD
-	nonceSize             int
-	noncePool             [][]byte
-	noncePoolIndex        int
-	noncePoolMutex        sync.Mutex
-	noncePoolSize         int
-	sequenceCounter       uint64
-	noncePoolSizeDefault  = 1024
-	encryptionInitialized bool
-	appKeyMap             keyMap
-	localDisloMutexMap    disloMutexMap
-	appKeyMapMutex        sync.Mutex
-	initEncryptionOnce    sync.Once
-	lockTimeout           = 5 * time.Second // Default timeout for Dislo locks
+	invalidKeySizeError     = errInvalidKeySize("encryption: invalid key size")
+	noncePool               [][]byte
+	noncePoolIndex          int
+	noncePools              = make(map[int][][]byte)
+	noncePoolIndices        = make(map[int]int)
+	noncePoolMutex          sync.Mutex
+	noncePoolSize           int
+	sequenceCounter         uint64
+	noncePoolSizeDefault    = 1024
+	encryptionInitialized   bool
+	appKeyMap               keyMap
+	localDisloMutexMap      disloMutexMap
+	localDisloMutexMapMutex sync.RWMutex
+	appKeyMapMutex          sync.Mutex
+	initEncryptionOnce      sync.Once
+	lockTimeout             = 5 * time.Second // Default timeout for Dislo locks
 )
 
 // A configuration struct for using Dislo for distributed locking.
@@ -147,6 +147,7 @@ func InitializeDisloLock(disloConfigMap []*DisloConfig) {
 		log.Debugf("encryption: Dislo lock initialized for ID: %s", disloConfig.DisloLockID)
 	}
 
+	localDisloMutexMapMutex.Lock()
 	if localDisloMutexMap == nil {
 		localDisloMutexMap = initDisloMutexMap
 	} else {
@@ -160,6 +161,7 @@ func InitializeDisloLock(disloConfigMap []*DisloConfig) {
 			}
 		}
 	}
+	localDisloMutexMapMutex.Unlock()
 
 	log.Debugf("encryption: Dislo locks initialized with %d keys", len(localDisloMutexMap))
 }
@@ -211,6 +213,7 @@ func DeleteDisloLock(disloConfig *DisloConfig) error {
 		log.Errorf("encryption: failed to acquire Dislo lock for deletion: %v", err)
 	}
 
+	localDisloMutexMapMutex.Lock()
 	_, ok := localDisloMutexMap[string(disloConfig.EncryptionKey)]
 
 	// This is to avoid a nil pointer if just trying to delete the lock in dislo
@@ -218,6 +221,7 @@ func DeleteDisloLock(disloConfig *DisloConfig) error {
 	if ok {
 		delete(localDisloMutexMap, string(disloConfig.EncryptionKey))
 	}
+	localDisloMutexMapMutex.Unlock()
 
 	log.Debugf("encryption: Dislo lock with ID %s deleted", disloConfig.DisloLockID)
 
@@ -244,7 +248,9 @@ func (l *keyLocks) lock(key []byte) error {
 
 	log.Debug("encryption: Acquiring lock")
 
+	localDisloMutexMapMutex.RLock()
 	disloMutex, ok := localDisloMutexMap[string(key)]
+	localDisloMutexMapMutex.RUnlock()
 	if !ok {
 		// If we don't have a Dislo lock, we can use the local mutex
 		log.Debug("encryption: Using local mutex for locking")
@@ -256,7 +262,9 @@ func (l *keyLocks) lock(key []byte) error {
 			l.unlocked = true // We set unlocked to avoid a local deadlock
 			return fmt.Errorf("encryption: failed to acquire Dislo lock: %w", err)
 		}
+		localDisloMutexMapMutex.Lock()
 		localDisloMutexMap[string(key)] = disloMutex // Store the Dislo mutex in the local map
+		localDisloMutexMapMutex.Unlock()
 	}
 
 	// Set unlocked to false as we have acquired the lock
@@ -274,7 +282,9 @@ func (l *keyLocks) unlock(key []byte) error {
 	log.Debug("encryption: Releasing lock")
 
 	if !l.unlocked {
+		localDisloMutexMapMutex.RLock()
 		disloMutex, ok := localDisloMutexMap[string(key)]
+		localDisloMutexMapMutex.RUnlock()
 		if !ok {
 			// If we don't have a Dislo lock, we can use the local mutex
 			log.Debug("encryption: Using local mutex for unlocking")
@@ -311,35 +321,34 @@ func Encrypt(plaintext []byte, key []byte, useBinaryData bool) (interface{}, err
 		return nil, fmt.Errorf("encryption: encryption not initialized")
 	}
 
+	var keyValMapKey *struct {
+		cipher cipher.AEAD
+		locks  *keyLocks
+	}
+	var ok bool
+
 	appKeyMapMutex.Lock()
-	keyValMapKey, ok := appKeyMap[string(key)]
-	var aesgcm cipher.AEAD
+	keyValMapKey, ok = appKeyMap[string(key)]
 	if !ok {
-		log.Debug("encryption: Key not found, initializing cipher")
 		aesgcm, err := initCipher(key)
 		if err != nil {
 			appKeyMapMutex.Unlock()
 			log.Errorf("encryption: Failed to initialize cipher: %v", err)
 			return nil, fmt.Errorf("encryption: failed to initialize cipher: %w", err)
-		} else {
-			log.Debugf("encryption: Cipher initialized")
-			keyValMapKey = &struct {
-				cipher cipher.AEAD
-				locks  *keyLocks
-			}{
-				cipher: aesgcm,
-				locks:  &keyLocks{},
-			}
-			appKeyMap[string(key)] = keyValMapKey
-
 		}
-	} else {
-		log.Debug("encryption: Key found")
+		keyValMapKey = &struct {
+			cipher cipher.AEAD
+			locks  *keyLocks
+		}{
+			cipher: aesgcm,
+			locks:  &keyLocks{},
+		}
+		appKeyMap[string(key)] = keyValMapKey
+	} else if keyValMapKey.locks == nil {
+		keyValMapKey.locks = &keyLocks{}
 	}
+	aesgcm := keyValMapKey.cipher
 	appKeyMapMutex.Unlock()
-
-	aesgcm = keyValMapKey.cipher
-	log.Debugf("encryption: Cipher set")
 
 	if keyValMapKey.locks == nil {
 		return nil, fmt.Errorf("encryption: locks not initialized for key %s", string(key))
@@ -353,36 +362,22 @@ func Encrypt(plaintext []byte, key []byte, useBinaryData bool) (interface{}, err
 		}
 	}()
 
-	initNoncePool(aesgcm.NonceSize())
-	log.Debug("encryption: Nonce pool initialized")
+	// --- Use a fresh random nonce for each encryption ---
+	nonce := make([]byte, aesgcm.NonceSize())
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		return nil, fmt.Errorf("encryption: failed to generate nonce: %w", err)
+	}
 
 	if len(key) != aes256KeySize {
 		return nil, invalidKeySizeError
 	}
-	log.Debug("encryption: Key size checked")
 
-	nonce := getNonce(nonceSize)
-	log.Debugf("Nonce: %v", nonce)
-	sequenceNumber := getNextSequenceNumber()
-	aad := make([]byte, 8)
-	binary.LittleEndian.PutUint64(aad, sequenceNumber)
-	ciphertext := aesgcm.Seal(nil, nonce, plaintext, aad)
-
-	// Append the nonce to the ciphertext
+	ciphertext := aesgcm.Seal(nil, nonce, plaintext, nil)
 	ciphertext = append(nonce, ciphertext...)
-
-	// Append the AAD to the ciphertext
-	ciphertextWithAAD := append(aad, ciphertext...)
-
-	// If you want to simply return the ciphertext as a byte slice
-	// or if you want to encode it with hex
 	if useBinaryData {
-		log.Debug("Returning binary data")
-		return ciphertextWithAAD, nil
+		return ciphertext, nil
 	} else {
-		log.Debug("Returning encoded data")
-		// Encode with Hex over b64 for performance reasons
-		encodedHex := hex.EncodeToString(ciphertextWithAAD)
+		encodedHex := hex.EncodeToString(ciphertext)
 		return encodedHex, nil
 	}
 }
@@ -398,35 +393,37 @@ func EncryptDeterministic(plaintext []byte, key []byte, useBinaryData bool) (int
 		return nil, fmt.Errorf("encryption: encryption not initialized")
 	}
 
+	var keyValMapKey *struct {
+		cipher cipher.AEAD
+		locks  *keyLocks
+	}
+	var ok bool
+
 	appKeyMapMutex.Lock()
-	keyValMapKey, ok := appKeyMap[string(key)]
-	var aesgcm cipher.AEAD
+	keyValMapKey, ok = appKeyMap[string(key)]
 	if !ok {
-		log.Debug("encryption: Key not found, initializing cipher")
 		aesgcm, err := initCipher(key)
 		if err != nil {
 			appKeyMapMutex.Unlock()
 			log.Errorf("encryption: Failed to initialize cipher: %v", err)
 			return nil, fmt.Errorf("encryption: failed to initialize cipher: %w", err)
-		} else {
-			log.Debugf("encryption: Cipher initialized")
-			keyValMapKey = &struct {
-				cipher cipher.AEAD
-				locks  *keyLocks
-			}{
-				cipher: aesgcm,
-				locks:  &keyLocks{},
-			}
-			appKeyMap[string(key)] = keyValMapKey
-
 		}
-	} else {
-		log.Debug("encryption: Key found")
+		keyValMapKey = &struct {
+			cipher cipher.AEAD
+			locks  *keyLocks
+		}{
+			cipher: aesgcm,
+			locks:  &keyLocks{},
+		}
+		appKeyMap[string(key)] = keyValMapKey
+	} else if keyValMapKey.locks == nil {
+		keyValMapKey.locks = &keyLocks{}
 	}
+	aesgcm := keyValMapKey.cipher
 	appKeyMapMutex.Unlock()
 
 	aesgcm = keyValMapKey.cipher
-	log.Debugf("encryption: Cipher set")
+
 	if keyValMapKey.locks == nil {
 		return nil, fmt.Errorf("encryption: locks not initialized for key %s", string(key))
 	}
@@ -439,41 +436,25 @@ func EncryptDeterministic(plaintext []byte, key []byte, useBinaryData bool) (int
 		}
 	}()
 
-	initNoncePool(aesgcm.NonceSize())
-	log.Debugf("encryption: Nonce pool initialized")
-
 	if len(key) != aes256KeySize {
 		return nil, invalidKeySizeError
 	}
-	log.Debugf("encryption: Key size checked")
 
-	var nonce []byte
-	// Deterministic nonce: use a hash of the key and plaintext
-	// This is a simplified example; consider using HKDF for better security.
-	nonce = make([]byte, aesgcm.NonceSize())
+	// --- Deterministic nonce: hash of key+plaintext ---
+	nonce := make([]byte, aesgcm.NonceSize())
 	h := sha256.Sum256(append(key, plaintext...))
 	copy(nonce, h[:aesgcm.NonceSize()])
 
-	log.Debugf("Nonce: %v", nonce)
-	// sequenceNumber := getNextSequenceNumber() // Removed
 	aad := make([]byte, 8)
-	binary.LittleEndian.PutUint64(aad, 0) // Always use 0 for deterministic
+	binary.LittleEndian.PutUint64(aad, 0)
 	ciphertext := aesgcm.Seal(nil, nonce, plaintext, aad)
 
-	// Append the nonce to the ciphertext
 	ciphertext = append(nonce, ciphertext...)
-
-	// Append the AAD to the ciphertext
 	ciphertextWithAAD := append(aad, ciphertext...)
 
-	// If you want to simply return the ciphertext as a byte slice
-	// or if you want to encode it with hex
 	if useBinaryData {
-		log.Debugf("Returning binary data")
 		return ciphertextWithAAD, nil
 	} else {
-		log.Debugf("Returning encoded data")
-		// Encode with Hex over b64 for performance reasons
 		encodedHex := hex.EncodeToString(ciphertextWithAAD)
 		return encodedHex, nil
 	}
@@ -496,28 +477,24 @@ func Decrypt(ciphertext interface{}, key []byte, usedBinaryData bool) ([]byte, e
 		return nil, invalidKeySizeError
 	}
 
-	var err error
-
-	log.Debug("decryption: Retrieving key")
+	var keyValMapKey *struct {
+		cipher cipher.AEAD
+		locks  *keyLocks
+	}
+	var ok bool
 
 	appKeyMapMutex.Lock()
-	keyValMapKey, ok := appKeyMap[string(key)]
+	keyValMapKey, ok = appKeyMap[string(key)]
 	if !ok {
 		appKeyMapMutex.Unlock()
 		return nil, fmt.Errorf("decryption: key not found")
 	}
-
-	log.Debug("decryption: Key found")
-	aesgcm = keyValMapKey.cipher
-	if aesgcm == nil {
-		appKeyMapMutex.Unlock()
-		return nil, fmt.Errorf("decryption: cipher not found")
+	if keyValMapKey.locks == nil {
+		keyValMapKey.locks = &keyLocks{}
 	}
+	aesgcm := keyValMapKey.cipher
 	appKeyMapMutex.Unlock()
 
-	if keyValMapKey.locks == nil {
-		return nil, fmt.Errorf("encryption: locks not initialized for key %s", string(key))
-	}
 	if err := keyValMapKey.locks.lock(key); err != nil {
 		return nil, err
 	}
@@ -529,23 +506,16 @@ func Decrypt(ciphertext interface{}, key []byte, usedBinaryData bool) ([]byte, e
 
 	var ciphertextBytes []byte
 
-	// Ensure that the ciphertext is in the correct format
 	if usedBinaryData {
-		ciphertextBytes, ok := ciphertext.([]byte)
+		ciphertextBytes, ok = ciphertext.([]byte)
 		if !ok {
 			return nil, fmt.Errorf("decryption: ciphertext must be []byte when using binary data, got %T", ciphertext)
 		}
-		log.Debugf("decryption: Ciphertext is []byte, length: %d", len(ciphertextBytes))
-
-		if len(ciphertextBytes) < 8+nonceSize {
+		if len(ciphertextBytes) < aesgcm.NonceSize() {
 			return nil, fmt.Errorf("decryption: ciphertext too short")
 		}
-
-		aad := ciphertextBytes[:8]
-		ciphertextBytes = ciphertextBytes[8:]
-		nonce, ciphertextBytes := ciphertextBytes[:nonceSize], ciphertextBytes[nonceSize:]
-		log.Debugf("Nonce: %v", nonce)
-		plaintext, err := aesgcm.Open(nil, nonce, ciphertextBytes, aad)
+		nonce, ciphertextBytes := ciphertextBytes[:aesgcm.NonceSize()], ciphertextBytes[aesgcm.NonceSize():]
+		plaintext, err := aesgcm.Open(nil, nonce, ciphertextBytes, nil)
 		if err != nil {
 			return nil, fmt.Errorf("decryption: failed to decrypt: %w", err)
 		}
@@ -555,17 +525,15 @@ func Decrypt(ciphertext interface{}, key []byte, usedBinaryData bool) ([]byte, e
 		if !ok {
 			return nil, fmt.Errorf("decryption: ciphertext must be string when using text data, got %T", ciphertext)
 		}
-		log.Debugf("decryption: Ciphertext is string, length: %d", len(ciphertextString))
-		ciphertextBytes, err = hex.DecodeString(ciphertextString)
+		ciphertextBytes, err := hex.DecodeString(ciphertextString)
 		if err != nil {
 			return nil, fmt.Errorf("decryption: failed to decode base64: %w", err)
 		}
-
-		aad := ciphertextBytes[:8]
-		ciphertextBytes = ciphertextBytes[8:]
-		nonce, ciphertextBytes := ciphertextBytes[:nonceSize], ciphertextBytes[nonceSize:]
-		log.Debugf("Nonce: %v", nonce)
-		plaintext, err := aesgcm.Open(nil, nonce, ciphertextBytes, aad)
+		if len(ciphertextBytes) < aesgcm.NonceSize() {
+			return nil, fmt.Errorf("decryption: ciphertext too short")
+		}
+		nonce, ciphertextBytes := ciphertextBytes[:aesgcm.NonceSize()], ciphertextBytes[aesgcm.NonceSize():]
+		plaintext, err := aesgcm.Open(nil, nonce, ciphertextBytes, nil)
 		if err != nil {
 			return nil, fmt.Errorf("decryption: failed to decrypt: %w", err)
 		}
@@ -582,50 +550,6 @@ func GenerateRandomKey() ([]byte, error) {
 		return nil, fmt.Errorf("key generation: failed to read random bytes: %w", err)
 	}
 	return key, nil
-}
-
-// initNoncePool initializes the nonce pool with random nonces.
-func initNoncePool(nonceSize int) {
-	noncePool = make([][]byte, noncePoolSize)
-	for i := 0; i < noncePoolSize; i++ {
-		noncePool[i] = make([]byte, nonceSize)
-		_, err := io.ReadFull(rand.Reader, noncePool[i])
-		if err != nil {
-			log.Fatalf("Failed to initialize nonce pool: %v", err)
-		}
-	}
-}
-
-// getNonce returns a random nonce from the pool.
-func getNonce(nonceSize int) []byte {
-	noncePoolMutex.Lock()
-	defer noncePoolMutex.Unlock()
-
-	nonce := noncePool[noncePoolIndex]
-	noncePoolIndex = (noncePoolIndex + 1) % noncePoolSize
-
-	// Refill the pool if it's getting low.
-	// This is important to avoid a situation where all concurrent requests try to refill it.
-	if noncePoolIndex == 0 {
-		go refillNoncePool(nonceSize)
-	}
-
-	return nonce
-}
-
-// refillNoncePool refills the nonce pool with fresh random nonces.
-func refillNoncePool(nonceSize int) {
-	noncePoolMutex.Lock()
-	defer noncePoolMutex.Unlock()
-	for i := 0; i < noncePoolSize; i++ {
-		if noncePool[i] == nil {
-			noncePool[i] = make([]byte, nonceSize)
-			_, err := io.ReadFull(rand.Reader, noncePool[i])
-			if err != nil {
-				log.Errorf("Failed to refill nonce pool: %v", err)
-			}
-		}
-	}
 }
 
 // getNextSequenceNumber returns the next sequence number.
@@ -650,7 +574,6 @@ func initCipher(key []byte) (cipher.AEAD, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create GCM: %w", err)
 	}
-	nonceSize = aesgcm.NonceSize()
 	log.Debug("Returning cipher")
 	return aesgcm, nil
 }
