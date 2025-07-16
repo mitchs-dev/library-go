@@ -2,6 +2,8 @@
 Package encryption provides functions for encrypting and decrypting data using AES-256-GCM.
 
 Note: You MUST call InitEncryption before using any encryption functions.
+
+Note 2: If you want to use Dislo for distributed locking, you need to call InitializeDisloLock with a valid DisloConfig. You can do this before or after Initializing encryption, but it MUST be done before you encrypt/decrypt. You can also delete a Dislo lock using DeleteDisloLock. For deletions, you can perform them any time as long as a DisloConfig is provided.
 */
 package encryption
 
@@ -14,9 +16,12 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 	"sync/atomic"
 
+	"github.com/google/uuid"
+	"github.com/mitchs-dev/dislo/pkg/sdk/client"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -26,7 +31,12 @@ type errInvalidKeySize string
 // keyMap is a map of keys to their corresponding AES-GCM ciphers.
 type keyMap map[string]struct {
 	cipher cipher.AEAD
-	lock   sync.Mutex
+	locks  keyLocks
+}
+
+type keyLocks struct {
+	localLock sync.Mutex
+	unlocked  bool // Mainly for deferred unlocks
 }
 
 func (e errInvalidKeySize) Error() string {
@@ -46,9 +56,156 @@ var (
 	noncePoolSizeDefault  = 1024
 	encryptionInitialized bool
 	appKeyMap             keyMap
+	localDisloMutexMap    disloMutexMap
 )
 
+// A configuration struct for using Dislo for distributed locking.
+type DisloConfig struct {
+	Host          string
+	Port          int
+	SkipTLS       bool
+	InstanceID    int
+	Namespace     string
+	DisloLockID   string
+	DisloClientID uuid.UUID
+	EncryptionKey []byte // This is only kept locally and not used in Dislo
+}
+
+type disloMutex struct {
+	disloConfig *DisloConfig
+	disloClient *client.ClientContext
+}
+
+type disloMutexMap map[string]*disloMutex
+
 const aes256KeySize = 32
+
+// If you want to use Dislo for distributed locking,
+// you need to initialize it with the DisloConfig.
+// If you do not, local mutex will be used for locking.
+func InitializeDisloLock(disloConfigMap []*DisloConfig) {
+
+	if len(disloConfigMap) == 0 {
+		log.Debug("encryption: DisloConfig is not enabled or not set, using local mutex for locking")
+	}
+
+	// Initialize the Dislo client context
+	log.Debug("encryption: Initializing Dislo for distributed locking")
+
+	initDisloMutexMap := make(disloMutexMap)
+
+	for _, disloConfig := range disloConfigMap {
+
+		// Run validation checks on the DisloConfig
+		if disloConfig.Host == "" {
+			log.Fatal("encryption: DisloConfig Host is required")
+		}
+		if disloConfig.Port <= 0 {
+			log.Fatal("encryption: DisloConfig Port must be a positive integer")
+		}
+		if disloConfig.InstanceID <= 0 {
+			log.Fatal("encryption: DisloConfig InstanceID must be a positive integer")
+		}
+		if disloConfig.DisloClientID == uuid.Nil {
+			log.Fatal("encryption: DisloConfig DisloClientID must be a valid UUID")
+		}
+		if disloConfig.EncryptionKey == nil {
+			log.Fatal("encryption: DisloConfig EncryptionKey is required")
+		}
+
+		newClient := client.NewContext(
+			disloConfig.Host,
+			disloConfig.Port,
+			disloConfig.SkipTLS,
+			disloConfig.InstanceID,
+			disloConfig.DisloClientID,
+		)
+
+		if newClient == nil {
+			log.Fatalf("encryption: Failed to create Dislo client for %s:%d", disloConfig.Host, disloConfig.Port)
+		}
+
+		initDisloMutexMap[string(disloConfig.EncryptionKey)] = &disloMutex{
+			disloConfig: disloConfig,
+			disloClient: newClient,
+		}
+
+		correlationID := "enc.init." + disloConfig.DisloLockID + "." + disloConfig.Namespace + uuid.New().String()
+		err := newClient.Create(disloConfig.DisloLockID, disloConfig.Namespace, correlationID)
+		if err != nil {
+			if strings.Contains(err.Error(), "LOCK_ALREADY_EXISTS") {
+				log.Debugf("encryption: Dislo lock exists for ID: %s", disloConfig.DisloLockID)
+			} else {
+				log.Fatalf("encryption: Failed to create Dislo lock: %v", err)
+			}
+		}
+
+		log.Debugf("encryption: Dislo lock initialized for ID: %s", disloConfig.DisloLockID)
+	}
+
+	localDisloMutexMap = initDisloMutexMap
+	log.Debugf("encryption: Dislo locks initialized with %d keys", len(localDisloMutexMap))
+}
+
+// DeleteDisloLock deletes a Dislo lock for the given DisloConfig.
+func DeleteDisloLock(disloConfig *DisloConfig) error {
+	if disloConfig == nil {
+		return fmt.Errorf("encryption: DisloConfig is nil")
+	}
+
+	// Run validation checks on the DisloConfig
+	if disloConfig.Host == "" {
+		log.Fatal("encryption: DisloConfig Host is required")
+	}
+	if disloConfig.Port <= 0 {
+		log.Fatal("encryption: DisloConfig Port must be a positive integer")
+	}
+	if disloConfig.InstanceID <= 0 {
+		log.Fatal("encryption: DisloConfig InstanceID must be a positive integer")
+	}
+	if disloConfig.DisloClientID == uuid.Nil {
+		log.Fatal("encryption: DisloConfig DisloClientID must be a valid UUID")
+	}
+	if disloConfig.EncryptionKey == nil {
+		log.Fatal("encryption: DisloConfig EncryptionKey is required")
+	}
+	if disloConfig.DisloLockID == "" {
+		log.Fatal("encryption: DisloConfig DisloLockID is required")
+	}
+	if disloConfig.Namespace == "" {
+		log.Fatal("encryption: DisloConfig Namespace is required")
+	}
+
+	log.Debugf("encryption: Deleting Dislo lock for ID: %s", disloConfig.DisloLockID)
+	log.Debugf("encryption: Namespace: %s", disloConfig.Namespace)
+
+	// We create a new Dislo client context for instances
+	// where a local map may not exist
+	disloClient := client.NewContext(
+		disloConfig.Host,
+		disloConfig.Port,
+		disloConfig.SkipTLS,
+		disloConfig.InstanceID,
+		disloConfig.DisloClientID,
+	)
+
+	err := disloClient.Delete(disloConfig.DisloLockID, disloConfig.Namespace)
+	if err != nil {
+		log.Errorf("encryption: failed to acquire Dislo lock for deletion: %v", err)
+	}
+
+	_, ok := localDisloMutexMap[string(disloConfig.EncryptionKey)]
+
+	// This is to avoid a nil pointer if just trying to delete the lock in dislo
+	// and the local map hasn't been initialized
+	if ok {
+		delete(localDisloMutexMap, string(disloConfig.EncryptionKey))
+	}
+
+	log.Debugf("encryption: Dislo lock with ID %s deleted", disloConfig.DisloLockID)
+
+	return err
+}
 
 // InitEncryption should be run before any (de)encryption operations.
 func InitEncryption(setNoncePoolSize int) {
@@ -59,8 +216,68 @@ func InitEncryption(setNoncePoolSize int) {
 	}
 	// Make the key map
 	appKeyMap = newKeyMap()
+
 	log.Debugf("Encryption initialized with nonce pool size: %d", noncePoolSize)
 	encryptionInitialized = true
+}
+
+// Lock acquires a lock for the key map.
+// Logically uses local mutex or Dislo distributed lock based on the configuration.
+func (l *keyLocks) lock(key []byte) error {
+
+	log.Debug("encryption: Acquiring lock")
+
+	disloMutex, ok := localDisloMutexMap[string(key)]
+	if !ok {
+		// If we don't have a Dislo lock, we can use the local mutex
+		log.Debug("encryption: Using local mutex for locking")
+		l.localLock.Lock()
+	} else {
+		log.Debugf("encryption: Using Dislo for distributed locking (%s:%d:%s.%s)", disloMutex.disloConfig.DisloClientID.String(), disloMutex.disloConfig.InstanceID, disloMutex.disloConfig.Namespace, disloMutex.disloConfig.DisloLockID)
+		correlationID := "enc.lock." + disloMutex.disloConfig.DisloLockID + "." + disloMutex.disloConfig.Namespace + uuid.New().String()
+		if err := disloMutex.disloClient.Lock(disloMutex.disloConfig.DisloLockID, disloMutex.disloConfig.Namespace, correlationID); err != nil {
+			l.unlocked = true // We set unlocked to avoid a local deadlock
+			return fmt.Errorf("encryption: failed to acquire Dislo lock: %w", err)
+		}
+		localDisloMutexMap[string(key)] = disloMutex // Store the Dislo mutex in the local map
+	}
+
+	// Set unlocked to false as we have acquired the lock
+	l.unlocked = false
+
+	log.Debug("encryption: Lock acquired")
+
+	return nil
+}
+
+// Unlock releases the lock for the key map.
+// Logically uses local or Dislo mutex based on the configuration.
+func (l *keyLocks) unlock(key []byte) error {
+
+	log.Debug("encryption: Releasing lock")
+
+	if !l.unlocked {
+		disloMutex, ok := localDisloMutexMap[string(key)]
+		if !ok {
+			// If we don't have a Dislo lock, we can use the local mutex
+			log.Debug("encryption: Using local mutex for unlocking")
+			l.localLock.Unlock()
+		} else {
+			log.Debugf("encryption: Using Dislo for distributed locking (%s:%d:%s.%s)", disloMutex.disloConfig.DisloClientID.String(), disloMutex.disloConfig.InstanceID, disloMutex.disloConfig.Namespace, disloMutex.disloConfig.DisloLockID)
+			correlationID := "enc.unlock." + disloMutex.disloConfig.DisloLockID + "." + disloMutex.disloConfig.Namespace + uuid.New().String()
+			if err := disloMutex.disloClient.Unlock(disloMutex.disloConfig.DisloLockID, disloMutex.disloConfig.Namespace, correlationID); err != nil {
+				l.unlocked = true // We set unlocked to avoid a local deadlock
+				return fmt.Errorf("encryption: failed to release Dislo lock: %w", err)
+			}
+			log.Debug("encryption: Dislo lock released")
+		}
+	}
+	// Set unlocked lock is truly released
+	l.unlocked = true
+
+	log.Debug("encryption: Lock released")
+
+	return nil
 }
 
 /*
@@ -79,9 +296,8 @@ func Encrypt(plaintext []byte, key []byte, useBinaryData bool) (interface{}, err
 
 	keyValMapKey, ok := appKeyMap[string(key)]
 
-	log.Debug("encryption: Acquiring lock")
-	keyValMapKey.lock.Lock()
-	log.Debug("encryption: Lock acquired")
+	keyValMapKey.locks.lock(key)
+	defer keyValMapKey.locks.unlock(key)
 	var aesgcm cipher.AEAD
 	if !ok {
 		log.Debug("encryption: Key not found, initializing cipher")
@@ -91,8 +307,7 @@ func Encrypt(plaintext []byte, key []byte, useBinaryData bool) (interface{}, err
 		} else {
 			log.Debugf("encryption: Cipher initialized")
 			keyValMapKey.cipher = aesgcm
-			keyValMapKey.lock.Unlock()
-			log.Debug("encryption: Lock released")
+			keyValMapKey.locks.unlock(key)
 			appKeyMap[string(key)] = keyValMapKey
 
 		}
@@ -149,9 +364,8 @@ func EncryptDeterministic(plaintext []byte, key []byte, useBinaryData bool) (int
 
 	keyValMapKey, ok := appKeyMap[string(key)]
 
-	log.Debugf("encryption: Acquiring lock")
-	keyValMapKey.lock.Lock()
-	log.Debugf("encryption: Lock acquired")
+	keyValMapKey.locks.lock(key)
+	defer keyValMapKey.locks.unlock(key)
 	var aesgcm cipher.AEAD
 	if !ok {
 		log.Debugf("encryption: Key not found, initializing cipher")
@@ -161,8 +375,7 @@ func EncryptDeterministic(plaintext []byte, key []byte, useBinaryData bool) (int
 		} else {
 			log.Debugf("encryption: Cipher initialized")
 			keyValMapKey.cipher = aesgcm
-			keyValMapKey.lock.Unlock()
-			log.Debugf("encryption: Lock released")
+			keyValMapKey.locks.unlock(key)
 			appKeyMap[string(key)] = keyValMapKey
 
 		}
@@ -235,7 +448,8 @@ func Decrypt(ciphertext interface{}, key []byte, usedBinaryData bool) ([]byte, e
 	keyValMapKey, ok := appKeyMap[string(key)]
 
 	log.Debug("decryption: Acquiring lock")
-	keyValMapKey.lock.Lock()
+	keyValMapKey.locks.lock(key)
+	defer keyValMapKey.locks.unlock(key)
 	log.Debug("decryption: Lock acquired")
 	if !ok {
 		return nil, fmt.Errorf("decryption: key not found")
@@ -247,7 +461,7 @@ func Decrypt(ciphertext interface{}, key []byte, usedBinaryData bool) ([]byte, e
 	}
 	log.Debug("decryption: Cipher set")
 
-	keyValMapKey.lock.Unlock()
+	keyValMapKey.locks.unlock(key)
 	log.Debug("decryption: Lock released")
 
 	var ciphertextBytes []byte
