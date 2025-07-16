@@ -19,6 +19,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/mitchs-dev/dislo/pkg/sdk/client"
@@ -35,7 +36,7 @@ type keyMap map[string]struct {
 }
 
 type keyLocks struct {
-	localLock sync.Mutex
+	localLock sync.RWMutex
 	unlocked  bool // Mainly for deferred unlocks
 }
 
@@ -57,6 +58,8 @@ var (
 	encryptionInitialized bool
 	appKeyMap             keyMap
 	localDisloMutexMap    disloMutexMap
+	appKeyMapMutex        sync.Mutex
+	lockTimeout           = 5 * time.Second // Default timeout for Dislo locks
 )
 
 // A configuration struct for using Dislo for distributed locking.
@@ -307,28 +310,39 @@ func Encrypt(plaintext []byte, key []byte, useBinaryData bool) (interface{}, err
 		return nil, fmt.Errorf("encryption: encryption not initialized")
 	}
 
+	appKeyMapMutex.Lock()
 	keyValMapKey, ok := appKeyMap[string(key)]
-
-	keyValMapKey.locks.lock(key)
-	defer keyValMapKey.locks.unlock(key)
 	var aesgcm cipher.AEAD
 	if !ok {
 		log.Debug("encryption: Key not found, initializing cipher")
 		aesgcm, err := initCipher(key)
 		if err != nil {
-			log.Fatalf("encryption: Failed to initialize cipher: %v", err)
+			appKeyMapMutex.Unlock()
+			log.Errorf("encryption: Failed to initialize cipher: %v", err)
+			return nil, fmt.Errorf("encryption: failed to initialize cipher: %w", err)
 		} else {
 			log.Debugf("encryption: Cipher initialized")
 			keyValMapKey.cipher = aesgcm
-			keyValMapKey.locks.unlock(key)
+			keyValMapKey.locks = keyLocks{}
 			appKeyMap[string(key)] = keyValMapKey
 
 		}
 	} else {
 		log.Debug("encryption: Key found")
 	}
+	appKeyMapMutex.Unlock()
+
 	aesgcm = keyValMapKey.cipher
 	log.Debugf("encryption: Cipher set")
+
+	if err := keyValMapKey.locks.lock(key); err != nil {
+		return nil, err
+	}
+	defer func() {
+		if err := keyValMapKey.locks.unlock(key); err != nil {
+			log.Error(err)
+		}
+	}()
 
 	initNoncePool(aesgcm.NonceSize())
 	log.Debug("encryption: Nonce pool initialized")
@@ -375,28 +389,39 @@ func EncryptDeterministic(plaintext []byte, key []byte, useBinaryData bool) (int
 		return nil, fmt.Errorf("encryption: encryption not initialized")
 	}
 
+	appKeyMapMutex.Lock()
 	keyValMapKey, ok := appKeyMap[string(key)]
-
-	keyValMapKey.locks.lock(key)
-	defer keyValMapKey.locks.unlock(key)
 	var aesgcm cipher.AEAD
 	if !ok {
-		log.Debugf("encryption: Key not found, initializing cipher")
+		log.Debug("encryption: Key not found, initializing cipher")
 		aesgcm, err := initCipher(key)
 		if err != nil {
-			log.Fatalf("encryption: Failed to initialize cipher: %v", err)
+			appKeyMapMutex.Unlock()
+			log.Errorf("encryption: Failed to initialize cipher: %v", err)
+			return nil, fmt.Errorf("encryption: failed to initialize cipher: %w", err)
 		} else {
 			log.Debugf("encryption: Cipher initialized")
 			keyValMapKey.cipher = aesgcm
-			keyValMapKey.locks.unlock(key)
+			keyValMapKey.locks = keyLocks{}
 			appKeyMap[string(key)] = keyValMapKey
 
 		}
 	} else {
-		log.Debugf("encryption: Key found")
+		log.Debug("encryption: Key found")
 	}
+	appKeyMapMutex.Unlock()
+
 	aesgcm = keyValMapKey.cipher
 	log.Debugf("encryption: Cipher set")
+
+	if err := keyValMapKey.locks.lock(key); err != nil {
+		return nil, err
+	}
+	defer func() {
+		if err := keyValMapKey.locks.unlock(key); err != nil {
+			log.Error(err)
+		}
+	}()
 
 	initNoncePool(aesgcm.NonceSize())
 	log.Debugf("encryption: Nonce pool initialized")
@@ -458,23 +483,35 @@ func Decrypt(ciphertext interface{}, key []byte, usedBinaryData bool) ([]byte, e
 	var err error
 
 	log.Debug("decryption: Retrieving key")
-	keyValMapKey, ok := appKeyMap[string(key)]
 
-	log.Debug("decryption: Acquiring lock")
-	keyValMapKey.locks.lock(key)
-	defer keyValMapKey.locks.unlock(key)
-	log.Debug("decryption: Lock acquired")
+	appKeyMapMutex.Lock()
+	keyValMapKey, ok := appKeyMap[string(key)]
 	if !ok {
+		appKeyMapMutex.Unlock()
 		return nil, fmt.Errorf("decryption: key not found")
 	}
+
 	log.Debug("decryption: Key found")
 	aesgcm = keyValMapKey.cipher
 	if aesgcm == nil {
+		appKeyMapMutex.Unlock()
 		return nil, fmt.Errorf("decryption: cipher not found")
 	}
+	appKeyMapMutex.Unlock()
+
 	log.Debug("decryption: Cipher set")
 
-	keyValMapKey.locks.unlock(key)
+	log.Debug("decryption: Acquiring lock")
+	if err := keyValMapKey.locks.lock(key); err != nil {
+		return nil, err
+	}
+	defer func() {
+		if err := keyValMapKey.locks.unlock(key); err != nil {
+			log.Error(err)
+		}
+	}()
+	log.Debug("decryption: Lock acquired")
+
 	log.Debug("decryption: Lock released")
 
 	var ciphertextBytes []byte
@@ -486,6 +523,10 @@ func Decrypt(ciphertext interface{}, key []byte, usedBinaryData bool) ([]byte, e
 			return nil, fmt.Errorf("decryption: ciphertext must be []byte when using binary data, got %T", ciphertext)
 		}
 		log.Debugf("decryption: Ciphertext is []byte, length: %d", len(ciphertextBytes))
+
+		if len(ciphertextBytes) < 8+nonceSize {
+			return nil, fmt.Errorf("decryption: ciphertext too short")
+		}
 
 		aad := ciphertextBytes[:8]
 		ciphertextBytes = ciphertextBytes[8:]
@@ -586,31 +627,17 @@ func newKeyMap() keyMap {
 
 // initCipher initializes the AES cipher with the provided key.
 func initCipher(key []byte) (cipher.AEAD, error) {
-	var aesgcm cipher.AEAD
-	var initErr error
-	var once sync.Once
-
-	once.Do(func() {
-		log.Debug("Initializing cipher for key")
-		block, err := aes.NewCipher(key)
-		if err != nil {
-			initErr = fmt.Errorf("failed to create cipher: %w", err)
-			return
-		}
-		log.Debug("Creating GCM")
-		newAesgcm, err := cipher.NewGCM(block)
-		if err != nil {
-			initErr = fmt.Errorf("failed to create GCM: %w", err)
-			return
-		}
-
-		aesgcm = newAesgcm
-		nonceSize = aesgcm.NonceSize()
-	})
-	log.Debug("Returning cipher")
-	if initErr != nil {
-		return nil, initErr
+	log.Debug("Initializing cipher for key")
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create cipher: %w", err)
 	}
-
+	log.Debug("Creating GCM")
+	aesgcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create GCM: %w", err)
+	}
+	nonceSize = aesgcm.NonceSize()
+	log.Debug("Returning cipher")
 	return aesgcm, nil
 }
