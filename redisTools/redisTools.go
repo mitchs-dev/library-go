@@ -21,7 +21,8 @@ type RedisConfiguration struct {
 }
 
 type RedisConfigEncryption struct {
-	Key []byte
+	Key         []byte
+	DisloConfig *encryption.DisloConfig
 }
 
 type RedisConfigHost struct {
@@ -38,6 +39,15 @@ type RedisClient struct {
 
 // NewRedisClient returns a new Redis client
 func NewRedisClient(config RedisConfiguration) *RedisClient {
+
+	// Initialize dislo, if needed
+	if config.Encryption.DisloConfig != nil {
+		// The encryption package requires an array for the Dislo Config
+		disloConfigMap := make([]*encryption.DisloConfig, 1)
+		disloConfigMap[0] = config.Encryption.DisloConfig
+		encryption.InitializeDisloLock(disloConfigMap)
+	}
+
 	return &RedisClient{
 		client: redis.NewClient(RedisOptions(config)),
 		config: config,
