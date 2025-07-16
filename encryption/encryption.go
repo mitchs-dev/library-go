@@ -37,7 +37,6 @@ type keyMap map[string]*struct {
 
 type keyLocks struct {
 	localLock sync.RWMutex
-	unlocked  bool // Mainly for deferred unlocks
 }
 
 func (e errInvalidKeySize) Error() string {
@@ -259,17 +258,12 @@ func (l *keyLocks) lock(key []byte) error {
 		log.Debugf("encryption: Using Dislo for distributed locking (%s:%d:%s.%s)", disloMutex.disloConfig.DisloClientID.String(), disloMutex.disloConfig.InstanceID, disloMutex.disloConfig.Namespace, disloMutex.disloConfig.DisloLockID)
 		correlationID := "enc.lock." + disloMutex.disloConfig.DisloLockID + "." + disloMutex.disloConfig.Namespace + uuid.New().String()
 		if err := disloMutex.disloClient.Lock(disloMutex.disloConfig.DisloLockID, disloMutex.disloConfig.Namespace, correlationID); err != nil {
-			l.unlocked = true // We set unlocked to avoid a local deadlock
 			return fmt.Errorf("encryption: failed to acquire Dislo lock: %w", err)
 		}
 		localDisloMutexMapMutex.Lock()
 		localDisloMutexMap[string(key)] = disloMutex // Store the Dislo mutex in the local map
 		localDisloMutexMapMutex.Unlock()
 	}
-
-	// Set unlocked to false as we have acquired the lock
-	l.unlocked = false
-
 	log.Debug("encryption: Lock acquired")
 
 	return nil
@@ -281,26 +275,21 @@ func (l *keyLocks) unlock(key []byte) error {
 
 	log.Debug("encryption: Releasing lock")
 
-	if !l.unlocked {
-		localDisloMutexMapMutex.RLock()
-		disloMutex, ok := localDisloMutexMap[string(key)]
-		localDisloMutexMapMutex.RUnlock()
-		if !ok {
-			// If we don't have a Dislo lock, we can use the local mutex
-			log.Debug("encryption: Using local mutex for unlocking")
-			l.localLock.Unlock()
-		} else {
-			log.Debugf("encryption: Using Dislo for distributed locking (%s:%d:%s.%s)", disloMutex.disloConfig.DisloClientID.String(), disloMutex.disloConfig.InstanceID, disloMutex.disloConfig.Namespace, disloMutex.disloConfig.DisloLockID)
-			correlationID := "enc.unlock." + disloMutex.disloConfig.DisloLockID + "." + disloMutex.disloConfig.Namespace + uuid.New().String()
-			if err := disloMutex.disloClient.Unlock(disloMutex.disloConfig.DisloLockID, disloMutex.disloConfig.Namespace, correlationID); err != nil {
-				l.unlocked = true // We set unlocked to avoid a local deadlock
-				return fmt.Errorf("encryption: failed to release Dislo lock: %w", err)
-			}
-			log.Debug("encryption: Dislo lock released")
+	localDisloMutexMapMutex.RLock()
+	disloMutex, ok := localDisloMutexMap[string(key)]
+	localDisloMutexMapMutex.RUnlock()
+	if !ok {
+		// If we don't have a Dislo lock, we can use the local mutex
+		log.Debug("encryption: Using local mutex for unlocking")
+		l.localLock.Unlock()
+	} else {
+		log.Debugf("encryption: Using Dislo for distributed locking (%s:%d:%s.%s)", disloMutex.disloConfig.DisloClientID.String(), disloMutex.disloConfig.InstanceID, disloMutex.disloConfig.Namespace, disloMutex.disloConfig.DisloLockID)
+		correlationID := "enc.unlock." + disloMutex.disloConfig.DisloLockID + "." + disloMutex.disloConfig.Namespace + uuid.New().String()
+		if err := disloMutex.disloClient.Unlock(disloMutex.disloConfig.DisloLockID, disloMutex.disloConfig.Namespace, correlationID); err != nil {
+			return fmt.Errorf("encryption: failed to release Dislo lock: %w", err)
 		}
+		log.Debug("encryption: Dislo lock released")
 	}
-	// Set unlocked lock is truly released
-	l.unlocked = true
 
 	log.Debug("encryption: Lock released")
 
@@ -374,10 +363,12 @@ func Encrypt(plaintext []byte, key []byte, useBinaryData bool) (interface{}, err
 
 	ciphertext := aesgcm.Seal(nil, nonce, plaintext, nil)
 	ciphertext = append(nonce, ciphertext...)
+	ciphertextWithMarker := append([]byte{0x00}, ciphertext...)
+
 	if useBinaryData {
-		return ciphertext, nil
+		return ciphertextWithMarker, nil
 	} else {
-		encodedHex := hex.EncodeToString(ciphertext)
+		encodedHex := hex.EncodeToString(ciphertextWithMarker)
 		return encodedHex, nil
 	}
 }
@@ -452,10 +443,13 @@ func EncryptDeterministic(plaintext []byte, key []byte, useBinaryData bool) (int
 	ciphertext = append(nonce, ciphertext...)
 	ciphertextWithAAD := append(aad, ciphertext...)
 
+	// Add a marker byte for deterministic ciphertexts
+	ciphertextWithMarker := append([]byte{0x01}, ciphertextWithAAD...)
+
 	if useBinaryData {
-		return ciphertextWithAAD, nil
+		return ciphertextWithMarker, nil
 	} else {
-		encodedHex := hex.EncodeToString(ciphertextWithAAD)
+		encodedHex := hex.EncodeToString(ciphertextWithMarker)
 		return encodedHex, nil
 	}
 }
@@ -511,33 +505,53 @@ func Decrypt(ciphertext interface{}, key []byte, usedBinaryData bool) ([]byte, e
 		if !ok {
 			return nil, fmt.Errorf("decryption: ciphertext must be []byte when using binary data, got %T", ciphertext)
 		}
-		if len(ciphertextBytes) < aesgcm.NonceSize() {
+	} else {
+		ciphertextString, ok := ciphertext.(string)
+		if !ok {
+			return nil, fmt.Errorf("decryption: ciphertext must be string when using text data, got %T", ciphertext)
+		}
+		var err error
+		ciphertextBytes, err = hex.DecodeString(ciphertextString)
+		if err != nil {
+			return nil, fmt.Errorf("decryption: failed to decode base64: %w", err)
+		}
+	}
+
+	if len(ciphertextBytes) < 1 {
+		return nil, fmt.Errorf("decryption: ciphertext too short")
+	}
+
+	marker := ciphertextBytes[0]
+	ciphertextBytes = ciphertextBytes[1:]
+
+	nonceSize := aesgcm.NonceSize()
+
+	if marker == 0x01 {
+		// Deterministic mode
+		if len(ciphertextBytes) < 8+nonceSize {
+			return nil, fmt.Errorf("decryption: deterministic ciphertext too short")
+		}
+		aad := ciphertextBytes[:8]
+		nonce := ciphertextBytes[8 : 8+nonceSize]
+		ciphertextBytes = ciphertextBytes[8+nonceSize:]
+		plaintext, err := aesgcm.Open(nil, nonce, ciphertextBytes, aad)
+		if err != nil {
+			return nil, fmt.Errorf("decryption: failed to decrypt: %w", err)
+		}
+		return plaintext, nil
+	} else if marker == 0x00 {
+		// Probabilistic mode
+		if len(ciphertextBytes) < nonceSize {
 			return nil, fmt.Errorf("decryption: ciphertext too short")
 		}
-		nonce, ciphertextBytes := ciphertextBytes[:aesgcm.NonceSize()], ciphertextBytes[aesgcm.NonceSize():]
+		nonce, ciphertextBytes := ciphertextBytes[:nonceSize], ciphertextBytes[nonceSize:]
 		plaintext, err := aesgcm.Open(nil, nonce, ciphertextBytes, nil)
 		if err != nil {
 			return nil, fmt.Errorf("decryption: failed to decrypt: %w", err)
 		}
 		return plaintext, nil
 	} else {
-		ciphertextString, ok := ciphertext.(string)
-		if !ok {
-			return nil, fmt.Errorf("decryption: ciphertext must be string when using text data, got %T", ciphertext)
-		}
-		ciphertextBytes, err := hex.DecodeString(ciphertextString)
-		if err != nil {
-			return nil, fmt.Errorf("decryption: failed to decode base64: %w", err)
-		}
-		if len(ciphertextBytes) < aesgcm.NonceSize() {
-			return nil, fmt.Errorf("decryption: ciphertext too short")
-		}
-		nonce, ciphertextBytes := ciphertextBytes[:aesgcm.NonceSize()], ciphertextBytes[aesgcm.NonceSize():]
-		plaintext, err := aesgcm.Open(nil, nonce, ciphertextBytes, nil)
-		if err != nil {
-			return nil, fmt.Errorf("decryption: failed to decrypt: %w", err)
-		}
-		return plaintext, nil
+		return nil, fmt.Errorf("decryption: unknown ciphertext marker")
 	}
 }
 
