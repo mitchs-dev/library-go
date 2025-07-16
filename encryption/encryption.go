@@ -323,8 +323,13 @@ func Encrypt(plaintext []byte, key []byte, useBinaryData bool) (interface{}, err
 			return nil, fmt.Errorf("encryption: failed to initialize cipher: %w", err)
 		} else {
 			log.Debugf("encryption: Cipher initialized")
-			keyValMapKey.cipher = aesgcm
-			keyValMapKey.locks = &keyLocks{}
+			keyValMapKey = &struct {
+				cipher cipher.AEAD
+				locks  *keyLocks
+			}{
+				cipher: aesgcm,
+				locks:  &keyLocks{},
+			}
 			appKeyMap[string(key)] = keyValMapKey
 
 		}
@@ -405,8 +410,13 @@ func EncryptDeterministic(plaintext []byte, key []byte, useBinaryData bool) (int
 			return nil, fmt.Errorf("encryption: failed to initialize cipher: %w", err)
 		} else {
 			log.Debugf("encryption: Cipher initialized")
-			keyValMapKey.cipher = aesgcm
-			keyValMapKey.locks = &keyLocks{}
+			keyValMapKey = &struct {
+				cipher cipher.AEAD
+				locks  *keyLocks
+			}{
+				cipher: aesgcm,
+				locks:  &keyLocks{},
+			}
 			appKeyMap[string(key)] = keyValMapKey
 
 		}
