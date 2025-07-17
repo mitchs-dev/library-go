@@ -521,13 +521,12 @@ func Decrypt(ciphertext interface{}, key []byte, usedBinaryData bool) ([]byte, e
 		return nil, fmt.Errorf("decryption: ciphertext too short")
 	}
 
-	marker := ciphertextBytes[0]
-	ciphertextBytes = ciphertextBytes[1:]
-
 	nonceSize := aesgcm.NonceSize()
+	marker := ciphertextBytes[0]
 
 	if marker == 0x01 {
 		// Deterministic mode
+		ciphertextBytes = ciphertextBytes[1:]
 		if len(ciphertextBytes) < 8+nonceSize {
 			return nil, fmt.Errorf("decryption: deterministic ciphertext too short")
 		}
@@ -541,6 +540,7 @@ func Decrypt(ciphertext interface{}, key []byte, usedBinaryData bool) ([]byte, e
 		return plaintext, nil
 	} else if marker == 0x00 {
 		// Probabilistic mode
+		ciphertextBytes = ciphertextBytes[1:]
 		if len(ciphertextBytes) < nonceSize {
 			return nil, fmt.Errorf("decryption: ciphertext too short")
 		}
@@ -551,7 +551,18 @@ func Decrypt(ciphertext interface{}, key []byte, usedBinaryData bool) ([]byte, e
 		}
 		return plaintext, nil
 	} else {
-		return nil, fmt.Errorf("decryption: unknown ciphertext marker")
+		// Legacy deterministic: no marker, starts with 8-byte AAD
+		if len(ciphertextBytes) < 8+nonceSize {
+			return nil, fmt.Errorf("decryption: legacy deterministic ciphertext too short")
+		}
+		aad := ciphertextBytes[:8]
+		nonce := ciphertextBytes[8 : 8+nonceSize]
+		ciphertextBytes = ciphertextBytes[8+nonceSize:]
+		plaintext, err := aesgcm.Open(nil, nonce, ciphertextBytes, aad)
+		if err != nil {
+			return nil, fmt.Errorf("decryption: failed to decrypt legacy deterministic: %w", err)
+		}
+		return plaintext, nil
 	}
 }
 
